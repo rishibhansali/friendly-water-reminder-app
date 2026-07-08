@@ -3,14 +3,18 @@
 ## What This Project Is
 
 A personal-use (not App Store distributed) macOS menu bar utility that reminds the user to
-drink water on a configurable timer. A tray icon controls on/off state, goal, and snoozing.
-When the timer fires, a small transparent/frameless/always-on-top window slides an animated
-2D character in from the bottom-right of the screen, settles into an idle loop, then offers
-"Drink Water," "Snooze," and "Settings." Progress and settings persist locally.
+drink water on a configurable timer. A tray icon controls on/off state, goal, snoozing, and
+opens Settings. When the timer fires, a small transparent/frameless/always-on-top window slides
+an animated 2D character in from the bottom-right of the screen, loops its walk cycle, then
+offers "Drink Water" and "Snooze" — clicking either walks the character back off-screen before
+the window hides. ("Settings" was originally a third overlay button too, but was removed as
+redundant once the tray already had its own "Settings…" item.) Progress and settings persist
+locally.
 
-**Status:** The full original core loop is complete and now packages into a real standalone
-`.app` via `electron-builder`. Remaining work is polish (real character art/Lottie, a real tray
-icon) — see "Current Status" below.
+**Status:** The full original core loop is complete, packages into a real standalone `.app` via
+`electron-builder`, and both renderer UIs (the character overlay and the Settings window) now
+have real visual polish instead of placeholder styling. Remaining work: a real tray icon (still
+a 💧 emoji placeholder) — see "Current Status" below.
 
 ## Tech Stack
 
@@ -28,9 +32,11 @@ icon) — see "Current Status" below.
   the current v11 — v9+ is ESM-only and cannot be `require()`'d from the CommonJS-compiled main
   process (see Build Pipeline). Re-evaluate the pin only if the main process is ever migrated
   to ESM output.
-- **lottie-react** — planned for rendering the "Groovy Walk Cycle" character animation as a
-  Lottie JSON file. Installed now (per the agreed tech stack) but not wired into any component
-  yet — that happens when the character popup feature is built.
+- **lottie-react** — renders the overlay's character animation: "Groovy Walk Cycle" by David
+  Probst Jr (LottieFiles, free license, ID `PgEaXAFsPH`), bundled as
+  `src/renderer/assets/groovy-walk-cycle.json`. LottieFiles' site is behind Cloudflare bot
+  protection (`WebFetch`/`curl` both get a "Just a moment…" challenge page, not the asset) — the
+  file had to be downloaded manually in a browser and handed over, not fetched programmatically.
 - **ESLint + Prettier** — linting/formatting, flat ESLint config (`eslint.config.mjs`, ESLint 9).
 - **Vitest** — unit tests for shared/pure logic (main and renderer are thin by design; most
   test coverage should target `src/shared`).
@@ -149,7 +155,8 @@ asar-relative resource paths) and didn't.
 - `src/renderer/` — React UI, built with Vite to `dist/renderer/` as two pages: `main.tsx` mounts
   `Overlay.tsx` (`index.html`), `settings-main.tsx` mounts `Settings.tsx` (`settings.html`),
   styled by `overlay.css`/`settings.css` respectively. `vite-env.d.ts` pulls in Vite's client
-  types (needed for CSS side-effect imports to typecheck).
+  types (needed for CSS side-effect imports to typecheck). `assets/groovy-walk-cycle.json` is the
+  overlay's Lottie animation (see Tech Stack).
 - `src/shared/` — Code and types used by both processes (constants, `AppSettings` shape, etc.).
   No Electron or DOM APIs here — keep it environment-agnostic so it's easy to unit test.
 - `dist/` — build output (gitignored).
@@ -164,13 +171,16 @@ asar-relative resource paths) and didn't.
 - **IPC boundary:** only preload scripts may use `contextBridge`. Renderer code must go through
   the bridge exposed to it — never enable `nodeIntegration` in a `BrowserWindow` to shortcut this.
   One bridge object per window's concerns, one preload script per window: `preload.ts` exposes
-  `window.overlayBridge` (`setInteractive`, `drinkWater`, `snooze`, `openSettings`) to the overlay
+  `window.overlayBridge` (`setInteractive`, `drinkWater`, `snooze`, `onShown`) to the overlay
   window; `settingsPreload.ts` exposes `window.settingsBridge` (`getSettings`,
   `setReminderInterval`, `setDailyGoal`, `setLaunchAtLogin`) to the Settings window. Each action
   method is its own IPC channel with its own `ipcMain.on`/`ipcMain.handle` handler, never one
-  shared channel branching on a payload — e.g. `overlay:drink-water`, `overlay:snooze`, and
-  `overlay:settings` are three separate handlers, so wiring the real Settings window into
-  `overlay:settings` only touched that one handler, nothing shared.
+  shared channel branching on a payload. (There used to be a third overlay action,
+  `overlay:settings`/`openSettings`, opening the Settings window from the overlay — removed along
+  with its button since the tray already has its own "Settings…" item; see the Character Overlay
+  Window entry below.) `overlay:shown` is the one main→renderer push (`webContents.send`, not a
+  reply to an `invoke`) — it tells the persistent, reused overlay window "you're visible again"
+  so it can replay its entrance animation on every show, not just the first.
 - **`settings:get` and `settings:get-progress` use `ipcMain.handle`/`invoke`, not `send`/`on`** —
   they're the only places a renderer needs a value _back_ from main (current settings to populate
   the form; today's drink count to show alongside it), so they're the app's only `invoke`-style
@@ -248,25 +258,46 @@ cluster` wrapper div** (the placeholder box + button row together), not the oute
     `setIgnoreMouseEvents(true, { forward: true })` before `show()`), so a window re-shown while
     the cursor happens to already be sitting over where the box will render doesn't inherit
     whatever interactive state it was left in.
-  - **Three buttons, three IPC channels, three handlers:** Drink Water calls `timer.drinkWater()`
-    then `hideOverlay()`; Snooze calls `timer.snooze()` then `hideOverlay()`; Settings calls
-    `openSettingsWindow()` (a plain function call — `overlay.ts` and `settings.ts` are both main
-    process, no IPC needed for this hop) then `hideOverlay()`. Drink Water intentionally does
-    **not** persist anything yet beyond a console log — daily drink-log persistence is its own
-    later task (holding off until Settings exists, so there's a UI to view/set the goal against).
+  - **Two buttons, two IPC channels, two handlers:** Drink Water calls `recordDrink()` +
+    `timer.drinkWater()` then `hideOverlay()`; Snooze calls `timer.snooze()` then `hideOverlay()`.
+    (A third, Settings, existed briefly — it called `openSettingsWindow()` directly since
+    `overlay.ts`/`settings.ts` are both main process, no IPC needed for that hop — but was removed
+    along with its button as redundant once the tray already has its own "Settings…" item; don't
+    re-add an `overlay:settings` channel without a reason, since this was a deliberate removal,
+    not an oversight.)
   - **Hiding:** a real 30s auto-hide fallback (`AUTO_HIDE_MS`) covers the case where the overlay is
-    ignored entirely — the only way it hides now besides clicking one of the three buttons. The
-    earlier "click anywhere hides" stand-in from the previous task is gone; it would have
-    conflicted with clicking a specific button. All hide paths go through the same `hideOverlay()`,
-    which also clears the auto-hide timer so it can't fire again after an already-hidden window.
-  - **Placeholder visual:** a plain rounded box plus a row of three plain buttons below it
-    (`overlay.css`), both inside `.interactive-cluster`, which as a whole slides in via CSS
-    `transform: translateX(150%) → translateX(0)` on mount — from the window's right edge, which
-    sits at the screen's right edge, so it reads as sliding in from off-screen. Buttons appear
-    immediately alongside the box rather than after a separate "settle" animation — the original
-    concept describes them appearing once the character settles, but sequencing that is an
-    animation-timing detail out of scope for this task, not attempted here. No idle loop, no
-    Lottie — separate future task.
+    ignored entirely — the only way it hides now besides clicking a button. All hide paths go
+    through the same `hideOverlay()`, which also clears the auto-hide timer so it can't fire again
+    after an already-hidden window.
+  - **Real character animation, not a placeholder:** `lottie-react`'s `<Lottie>` renders
+    `groovy-walk-cycle.json` (see Tech Stack) inside `.character-animation`
+    (`pointer-events: none`, so hover/click still passes through to its `.interactive-cluster`
+    parent — verified directly, see Testing below), `loop autoplay` so the walk cycle repeats
+    continuously once settled rather than freezing on one frame (the source animation is a single
+    ~1s walk-cycle loop with no separate named "idle" or "facing camera" segment — `data.markers`
+    has generic numbered markers, not named ones — so "settled" here means "keeps walking in
+    place," not a distinct standing pose; that would need a different/additional source
+    animation).
+  - **Entrance replays on every show, not just the first — this needed one new IPC message.**
+    The window is hidden/reused, never reloaded, so the renderer only ever mounts once; a CSS
+    mount-triggered animation (the original placeholder's approach) only ever plays that one time.
+    `showOverlay()` now also does `overlayWindow.webContents.send('overlay:shown')` after
+    `.show()`; `Overlay.tsx` subscribes via `overlayBridge.onShown()` in an effect and replays the
+    entrance (see below) on every event, not just on mount.
+  - **Entrance/exit is one CSS transition, driven by one boolean (`settled`), not two separate
+    animations.** `.interactive-cluster` transitions `transform` between `translateX(150%)`
+    (off-screen right) and `translateX(0)` (settled) over 0.5s. Entrance: on mount and on every
+    `overlay:shown`, set `settled=false` then flip to `true` inside a double
+    `requestAnimationFrame` (lets the browser paint the off-screen state first, so the class
+    change is a transition, not an instant jump). Exit: clicking Drink Water/Snooze sets
+    `settled=false` (the same transition, reversed — the character visibly "walks away") and
+    delays the actual `drinkWater()`/`snooze()` bridge call by `EXIT_ANIMATION_MS` (500ms, must
+    match the CSS duration) so the window doesn't hide out from under the animation. This is a
+    renderer-only delay — it changes _when_ the existing bridge methods get called, not what they
+    do, and doesn't touch `overlay.ts`'s hide timing at all.
+  - **Buttons are real styled buttons** (`.btn`, `.btn-primary`/`.btn-secondary` in `overlay.css`)
+    — a blue/water color theme, not default unstyled `<button>` elements — but the same two
+    `onClick` handlers as before, just wrapped in the walk-away delay above.
 
 - **Settings window (`src/main/settings.ts` + `src/renderer/Settings.tsx`):** a real, separate
   `BrowserWindow` — normal frame/title bar, not transparent or always-on-top, unlike the overlay —
@@ -291,6 +322,11 @@ cluster` wrapper div** (the placeholder box + button row together), not the oute
     Settings is also open (or vice versa), the one not just-clicked won't visually update until
     reopened. Deliberately out of scope for this task ("keep it simple") — would need
     `webContents.send` pushing updates to whichever window didn't originate the change.
+  - **Visual structure is wrapper `<div>`s only** (`.field-group`, `.field`, `.progress-card`,
+    etc., in `settings.css`) — a real styling/layout pass (title, card-style progress display,
+    consistent label/input spacing, a blue/water theme matching the overlay), with every
+    `onChange` handler and its validation left untouched. Adding wrapper elements for layout is
+    the only structural change; nothing here altered behavior.
 
 - **Daily progress (`src/main/progress.ts`):** stores a raw drink **count** (`drinksToday`), not
   ml and not per-drink timestamps — no historical/multi-day tracking, just today's count against
@@ -436,6 +472,19 @@ http://localhost:9222/json` lists open pages/windows (each `BrowserWindow`'s loa
   one. Fix: do the whole launch → wait-for-fire → measure-coordinates → click sequence inside a
   single self-contained script (one process, no inter-tool-call latency) rather than spreading it
   across multiple back-and-forth tool calls.
+- **Confirming a Lottie/SVG animation is actually progressing (not frozen on one frame) needs the
+  _right_ element sampled, not just _an_ element.** Reading one specific nested `<g>`'s `transform`
+  attribute twice and finding no change looked like a bug at first, but that particular group
+  simply wasn't one of the elements this animation moves — Lottie animates via whichever nested
+  elements the source file's layers happen to use (`d` path data, opacity, deeper transforms),
+  which varies per asset. Diff the _entire_ `outerHTML` of the animation's root SVG between two
+  timestamps instead of guessing which child element changes — if the strings differ at all, it's
+  playing.
+- **LottieFiles.com is behind Cloudflare bot protection** — both `WebFetch` and a direct `curl`
+  (even with a browser `User-Agent`) get a "Just a moment…" challenge page, not the animation JSON
+  or its download link. There's no way to script around this; ask the user to download the file
+  through their own browser and hand it over (path or the file itself) rather than guessing at a
+  substitute animation.
 
 ## Current Status
 
@@ -517,15 +566,15 @@ http://localhost:9222/json` lists open pages/windows (each `BrowserWindow`'s loa
       new fields on next launch (no manual migration needed).
 
       **This surfaced a real, previously-shipped bug**, unrelated to progress tracking itself:
-                  `index.ts` had no `window-all-closed` handler, so Electron's default behavior would quit the
-                  entire app the first time a user closed the Settings window before the overlay had ever
-                  been created (e.g. opening Settings from the tray before any reminder had fired) — zero
-                  windows open, no handler, app (and tray icon) gone. Fixed with a no-op handler; see
-                  Architectural Decisions and Testing above for how it was caught and confirmed fixed.
+                      `index.ts` had no `window-all-closed` handler, so Electron's default behavior would quit the
+                      entire app the first time a user closed the Settings window before the overlay had ever
+                      been created (e.g. opening Settings from the tray before any reminder had fired) — zero
+                      windows open, no handler, app (and tray icon) gone. Fixed with a no-op handler; see
+                      Architectural Decisions and Testing above for how it was caught and confirmed fixed.
 
-                  **This completes the original core loop end-to-end**: tray → timer fires → overlay shows →
-                  Drink Water/Snooze act on the real scheduler and now persist progress → Settings configures
-                  everything, including viewing that same progress.
+                      **This completes the original core loop end-to-end**: tray → timer fires → overlay shows →
+                      Drink Water/Snooze act on the real scheduler and now persist progress → Settings configures
+                      everything, including viewing that same progress.
 
 - [x] `electron-builder` packaging (`electron-builder.yml`, `npm run package`) — produces a real
       standalone `Friendly Water Reminder.app` (no signing/notarization, `mac.target: dir`, no
@@ -537,9 +586,22 @@ http://localhost:9222/json` lists open pages/windows (each `BrowserWindow`'s loa
       "Launch-at-login: known constraint of staying unsigned" above): Launch at Login registers
       correctly but does not silently auto-launch with this unsigned/ad-hoc-signed build. Resolved
       as a documented, accepted constraint rather than an open bug.
-- [ ] Lottie character animation (real character art, idle loop) — not started; current
-      placeholder is a plain colored box plus plain buttons.
+- [x] Real Lottie character animation + full visual polish on both renderer UIs — the overlay's
+      placeholder box is now the real "Groovy Walk Cycle" animation (`lottie-react`, looping
+      continuously once settled — the source file has no separate named idle/facing-camera
+      segment, see Architectural Decisions), its two remaining buttons (Settings was removed as
+      redundant with the tray's own item) are properly styled, and it now walks in fresh on every
+      show and walks away before hiding when Drink Water/Snooze is clicked (needed one new
+      `overlay:shown` IPC push from main, since the reused window only ever mounts its React tree
+      once). The Settings window got a real layout pass (title, card-style progress display,
+      consistent spacing) with zero logic changes. Verified end-to-end: the Lottie SVG genuinely
+      animates (diffed full markup across two timestamps, not just one — see Testing above for
+      why that mattered), hovering the character graphic itself (not just the buttons) still
+      correctly enables click-through interactivity (`pointer-events: none` pass-through), the
+      walk-away delay actually delays hiding by ~500ms rather than being instant, and the entrance
+      replays correctly on a second show, not just the first.
 - [ ] Real tray icon — not started; current placeholder is a 💧 emoji title, no image asset.
+      Explicitly out of scope for this task at your request.
 
 ## Definition of Done
 

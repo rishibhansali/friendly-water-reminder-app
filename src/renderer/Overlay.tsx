@@ -1,4 +1,12 @@
+import { useEffect, useRef, useState } from 'react';
+import Lottie from 'lottie-react';
+import groovyWalkCycle from './assets/groovy-walk-cycle.json';
 import './overlay.css';
+
+// Must match the CSS transition duration on .interactive-cluster below, so
+// the walk-away animation has time to finish before the window actually
+// hides (main hides it right after drinkWater()/snooze() is called).
+const EXIT_ANIMATION_MS = 500;
 
 declare global {
   interface Window {
@@ -6,12 +14,36 @@ declare global {
       setInteractive: (interactive: boolean) => void;
       drinkWater: () => void;
       snooze: () => void;
-      openSettings: () => void;
+      onShown: (callback: () => void) => () => void;
     };
   }
 }
 
 function Overlay() {
+  const [settled, setSettled] = useState(false);
+  const exitTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const playEntrance = () => {
+      if (exitTimeout.current) {
+        clearTimeout(exitTimeout.current);
+        exitTimeout.current = null;
+      }
+      // Start off-screen, then settle on the next frame so the transform
+      // change is a transition, not an instant jump.
+      setSettled(false);
+      requestAnimationFrame(() => requestAnimationFrame(() => setSettled(true)));
+    };
+
+    playEntrance(); // first-ever show (component mounts once, window is reused after)
+    return window.overlayBridge.onShown(playEntrance); // every show after that
+  }, []);
+
+  function walkAwayThen(action: () => void) {
+    setSettled(false); // reverses the same transition, walking back off-screen
+    exitTimeout.current = setTimeout(action, EXIT_ANIMATION_MS);
+  }
+
   return (
     <div className="overlay-root">
       {/* Hover/click listeners live on this cluster (character + buttons),
@@ -19,20 +51,25 @@ function Overlay() {
           (mostly transparent) window, and only the actual character/button
           area should ever stop being click-through. */}
       <div
-        className="interactive-cluster"
+        className={`interactive-cluster ${settled ? 'settled' : ''}`}
         onMouseEnter={() => window.overlayBridge.setInteractive(true)}
         onMouseLeave={() => window.overlayBridge.setInteractive(false)}
       >
-        <div className="placeholder-character" />
+        <Lottie animationData={groovyWalkCycle} loop autoplay className="character-animation" />
         <div className="button-row">
-          <button type="button" onClick={() => window.overlayBridge.drinkWater()}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => walkAwayThen(() => window.overlayBridge.drinkWater())}
+          >
             Drink Water
           </button>
-          <button type="button" onClick={() => window.overlayBridge.snooze()}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => walkAwayThen(() => window.overlayBridge.snooze())}
+          >
             Snooze
-          </button>
-          <button type="button" onClick={() => window.overlayBridge.openSettings()}>
-            Settings
           </button>
         </div>
       </div>

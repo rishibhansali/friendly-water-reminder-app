@@ -5,5 +5,9 @@ contextBridge.exposeInMainWorld('overlayBridge', {
     ipcRenderer.send('overlay:set-interactive', interactive),
   drinkWater: () => ipcRenderer.send('overlay:drink-water'),
   snooze: () => ipcRenderer.send('overlay:snooze'),
-  openSettings: () => ipcRenderer.send('overlay:settings'),
+  onShown: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('overlay:shown', listener);
+    return () => ipcRenderer.removeListener('overlay:shown', listener);
+  },
 });

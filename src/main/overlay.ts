@@ -1,7 +1,6 @@
 import { BrowserWindow, ipcMain, screen } from 'electron';
 import path from 'node:path';
 import { registerFireHandler, drinkWater, snooze } from './timer';
-import { openSettingsWindow } from './settings';
 import { recordDrink } from './progress';
 
 const WINDOW_WIDTH = 320;
@@ -83,6 +82,11 @@ function showOverlay(): void {
   overlayWindow.setPosition(x, y);
   overlayWindow.show();
 
+  // The window is hidden/reused, never reloaded, so the renderer only ever
+  // mounts once — this tells it "you're visible again" so it can replay the
+  // walk-in animation on every show, not just the first.
+  overlayWindow.webContents.send('overlay:shown');
+
   clearAutoHide();
   autoHideTimeout = setTimeout(hideOverlay, AUTO_HIDE_MS);
 }
@@ -103,12 +107,6 @@ export function initOverlay(): void {
   ipcMain.on('overlay:snooze', () => {
     console.log('[overlay] Snooze clicked.');
     snooze();
-    hideOverlay();
-  });
-
-  ipcMain.on('overlay:settings', () => {
-    console.log('[overlay] Settings clicked.');
-    openSettingsWindow();
     hideOverlay();
   });
 

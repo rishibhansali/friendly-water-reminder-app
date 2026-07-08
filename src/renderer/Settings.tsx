@@ -25,7 +25,11 @@ function Settings() {
   }, []);
 
   if (!settings) {
-    return <div className="settings-root">Loading…</div>;
+    return (
+      <div className="settings-root">
+        <p className="loading">Loading…</p>
+      </div>
+    );
   }
 
   // Derived live from the goal field so editing it updates the ratio
@@ -34,56 +38,65 @@ function Settings() {
 
   return (
     <div className="settings-root">
+      <h1 className="settings-title">Settings</h1>
+
       {drinksToday !== null && (
-        <p className="progress-line">
-          Today: {drinksToday} / {goalDrinks}
-        </p>
+        <div className="progress-card">
+          <span className="progress-value">
+            {drinksToday} <span className="progress-of">/ {goalDrinks}</span>
+          </span>
+          <span className="progress-label">drinks today</span>
+        </div>
       )}
 
-      <label>
-        Reminder interval (minutes)
-        <input
-          type="number"
-          min="1"
-          value={settings.reminderIntervalMinutes}
-          onChange={(e) => {
-            const minutes = e.target.valueAsNumber;
-            setSettings({ ...settings, reminderIntervalMinutes: minutes });
-            if (Number.isFinite(minutes) && minutes > 0) {
-              window.settingsBridge.setReminderInterval(minutes);
-            }
-          }}
-        />
-      </label>
+      <div className="field-group">
+        <label className="field">
+          <span className="field-label">Reminder interval (minutes)</span>
+          <input
+            type="number"
+            min="1"
+            className="field-input"
+            value={settings.reminderIntervalMinutes}
+            onChange={(e) => {
+              const minutes = e.target.valueAsNumber;
+              setSettings({ ...settings, reminderIntervalMinutes: minutes });
+              if (Number.isFinite(minutes) && minutes > 0) {
+                window.settingsBridge.setReminderInterval(minutes);
+              }
+            }}
+          />
+        </label>
 
-      <label>
-        Daily water goal (ml)
-        <input
-          type="number"
-          min="1"
-          value={settings.dailyGoalMl}
-          onChange={(e) => {
-            const ml = e.target.valueAsNumber;
-            setSettings({ ...settings, dailyGoalMl: ml });
-            if (Number.isFinite(ml) && ml > 0) {
-              window.settingsBridge.setDailyGoal(ml);
-            }
-          }}
-        />
-      </label>
+        <label className="field">
+          <span className="field-label">Daily water goal (ml)</span>
+          <input
+            type="number"
+            min="1"
+            className="field-input"
+            value={settings.dailyGoalMl}
+            onChange={(e) => {
+              const ml = e.target.valueAsNumber;
+              setSettings({ ...settings, dailyGoalMl: ml });
+              if (Number.isFinite(ml) && ml > 0) {
+                window.settingsBridge.setDailyGoal(ml);
+              }
+            }}
+          />
+        </label>
 
-      <label className="checkbox-row">
-        <input
-          type="checkbox"
-          checked={settings.launchAtLogin}
-          onChange={(e) => {
-            const enabled = e.target.checked;
-            setSettings({ ...settings, launchAtLogin: enabled });
-            window.settingsBridge.setLaunchAtLogin(enabled);
-          }}
-        />
-        Launch at Login
-      </label>
+        <label className="field field-checkbox">
+          <input
+            type="checkbox"
+            checked={settings.launchAtLogin}
+            onChange={(e) => {
+              const enabled = e.target.checked;
+              setSettings({ ...settings, launchAtLogin: enabled });
+              window.settingsBridge.setLaunchAtLogin(enabled);
+            }}
+          />
+          <span className="field-label">Launch at Login</span>
+        </label>
+      </div>
     </div>
   );
 }
