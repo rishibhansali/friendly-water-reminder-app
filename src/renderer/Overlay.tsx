@@ -3,10 +3,11 @@ import Lottie from 'lottie-react';
 import groovyWalkCycle from './assets/groovy-walk-cycle.json';
 import './overlay.css';
 
-// Must match the CSS transition duration on .interactive-cluster below, so
-// the walk-away animation has time to finish before the window actually
-// hides (main hides it right after drinkWater()/snooze() is called).
-const EXIT_ANIMATION_MS = 500;
+// Must match the CSS transition duration on .interactive-cluster in
+// overlay.css, so the walk-away animation has time to finish before the
+// window actually hides (main hides it right after drinkWater()/snooze()
+// is called).
+const EXIT_ANIMATION_MS = 2500;
 
 declare global {
   interface Window {

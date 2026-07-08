@@ -43,6 +43,15 @@ function createOverlayWindow(): BrowserWindow {
     },
   });
 
+  // By default an Electron window only lives on the Space/desktop it was
+  // shown on and doesn't necessarily float above other apps' windows once
+  // one of them is focused. Since this is meant to appear no matter what
+  // the user is doing — not just when looking at bare desktop — make it
+  // follow across every Space (including fullscreen ones) and sit at the
+  // highest standard always-on-top level.
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.setAlwaysOnTop(true, 'screen-saver');
+
   const devServerUrl = process.env.ELECTRON_RENDERER_URL;
   if (devServerUrl) {
     win.loadURL(devServerUrl);
@@ -80,7 +89,9 @@ function showOverlay(): void {
 
   const { x, y } = bottomRightPosition();
   overlayWindow.setPosition(x, y);
-  overlayWindow.show();
+  // showInactive(), not show() — this shouldn't steal keyboard focus from
+  // whatever app the user is actively working in.
+  overlayWindow.showInactive();
 
   // The window is hidden/reused, never reloaded, so the renderer only ever
   // mounts once — this tells it "you're visible again" so it can replay the
