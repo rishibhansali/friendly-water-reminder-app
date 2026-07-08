@@ -317,6 +317,16 @@ cluster` wrapper div** (the placeholder box + button row together), not the oute
     moves a roughly constant ~145-155px/second, arriving at 0 by ~2.8s; a real Drink Water click
     kept the window visible for ~2.9s before hiding, matching the slow walk-away, not an instant
     disappearance.
+  - **The character mirrors depending on travel direction** — a second, independent piece of
+    state (`facingLeft`), not tied to `settled`. The source animation faces/walks right by
+    default; moving right-to-left (entrance) needs `transform: scaleX(-1)` (the `.mirrored` class
+    on `.character-animation`, a _different_ element than `.interactive-cluster` — the mirror and
+    the position transition don't conflict since they're on separate elements) so the character
+    actually faces the direction it's travelling, while moving left-to-right (exit, back
+    off-screen) uses the unmirrored default, which already faces right. Set alongside (not
+    animated together with) the `settled` transition: `setFacingLeft(true)` at the start of
+    entrance, `setFacingLeft(false)` at the start of exit — an instant flip, not a smooth one,
+    since it's a discrete facing change, not a continuous motion.
   - **Buttons are real styled buttons** (`.btn`, `.btn-primary`/`.btn-secondary` in `overlay.css`)
     — a blue/water color theme, not default unstyled `<button>` elements — but the same two
     `onClick` handlers as before, just wrapped in the walk-away delay above.
@@ -595,15 +605,15 @@ http://localhost:9222/json` lists open pages/windows (each `BrowserWindow`'s loa
       new fields on next launch (no manual migration needed).
 
       **This surfaced a real, previously-shipped bug**, unrelated to progress tracking itself:
-                          `index.ts` had no `window-all-closed` handler, so Electron's default behavior would quit the
-                          entire app the first time a user closed the Settings window before the overlay had ever
-                          been created (e.g. opening Settings from the tray before any reminder had fired) — zero
-                          windows open, no handler, app (and tray icon) gone. Fixed with a no-op handler; see
-                          Architectural Decisions and Testing above for how it was caught and confirmed fixed.
+                              `index.ts` had no `window-all-closed` handler, so Electron's default behavior would quit the
+                              entire app the first time a user closed the Settings window before the overlay had ever
+                              been created (e.g. opening Settings from the tray before any reminder had fired) — zero
+                              windows open, no handler, app (and tray icon) gone. Fixed with a no-op handler; see
+                              Architectural Decisions and Testing above for how it was caught and confirmed fixed.
 
-                          **This completes the original core loop end-to-end**: tray → timer fires → overlay shows →
-                          Drink Water/Snooze act on the real scheduler and now persist progress → Settings configures
-                          everything, including viewing that same progress.
+                              **This completes the original core loop end-to-end**: tray → timer fires → overlay shows →
+                              Drink Water/Snooze act on the real scheduler and now persist progress → Settings configures
+                              everything, including viewing that same progress.
 
 - [x] `electron-builder` packaging (`electron-builder.yml`, `npm run package`) — produces a real
       standalone `Friendly Water Reminder.app` (no signing/notarization, `mac.target: dir`, no
@@ -635,12 +645,18 @@ http://localhost:9222/json` lists open pages/windows (each `BrowserWindow`'s loa
       `settled` class alone was misleading, since the class flips almost instantly while the CSS
       transition itself takes seconds). Also fixed the overlay only appearing on the bare desktop
       and disappearing when switching apps: added `setVisibleOnAllWorkspaces(true, {
-    visibleOnFullScreen: true })` and bumped to the `'screen-saver'` always-on-top level, plus
+  visibleOnFullScreen: true })` and bumped to the `'screen-saver'` always-on-top level, plus
       switched `show()` to `showInactive()` so it doesn't steal keyboard focus from whatever app
       is active. Verified programmatically that the window reports the correct
       workspace/always-on-top/focus state; **the actual "floats above a real fullscreen app /
       follows across Spaces" visual behavior needs your own confirmation** — not something safely
       testable from here without creating Spaces or launching fullscreen apps on the real desktop.
+- [x] Second follow-up: the character now mirrors to face the direction it's actually travelling
+      — walking in (right-to-left) is mirrored, walking away (left-to-right, back off-screen) uses
+      the source animation's native right-facing orientation. Without this, the character's legs
+      animated as if walking right while the whole cluster moved left, reading as wrong/unnaturally
+      fast rather than as a convincing walk. Verified the `.mirrored` class is present during
+      entrance and absent during exit at the right moments.
 - [ ] Real tray icon — not started; current placeholder is a 💧 emoji title, no image asset.
       Explicitly out of scope for this task at your request.
 

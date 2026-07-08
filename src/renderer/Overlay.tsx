@@ -22,6 +22,12 @@ declare global {
 
 function Overlay() {
   const [settled, setSettled] = useState(false);
+  // The source animation faces/walks right by default. Moving right-to-left
+  // (entrance) needs it mirrored to actually face the direction it's
+  // travelling; moving left-to-right (exit, back off-screen) is its native
+  // orientation. This is a discrete flip, not animated — only the cluster's
+  // position transitions.
+  const [facingLeft, setFacingLeft] = useState(true);
   const exitTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -32,6 +38,7 @@ function Overlay() {
       }
       // Start off-screen, then settle on the next frame so the transform
       // change is a transition, not an instant jump.
+      setFacingLeft(true);
       setSettled(false);
       requestAnimationFrame(() => requestAnimationFrame(() => setSettled(true)));
     };
@@ -41,6 +48,7 @@ function Overlay() {
   }, []);
 
   function walkAwayThen(action: () => void) {
+    setFacingLeft(false); // now walking right, back toward off-screen
     setSettled(false); // reverses the same transition, walking back off-screen
     exitTimeout.current = setTimeout(action, EXIT_ANIMATION_MS);
   }
@@ -56,7 +64,12 @@ function Overlay() {
         onMouseEnter={() => window.overlayBridge.setInteractive(true)}
         onMouseLeave={() => window.overlayBridge.setInteractive(false)}
       >
-        <Lottie animationData={groovyWalkCycle} loop autoplay className="character-animation" />
+        <Lottie
+          animationData={groovyWalkCycle}
+          loop
+          autoplay
+          className={`character-animation ${facingLeft ? 'mirrored' : ''}`}
+        />
         <div className="button-row">
           <button
             type="button"

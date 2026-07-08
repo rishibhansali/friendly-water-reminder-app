@@ -46,6 +46,13 @@ body,
   pointer-events: none;
 }
 
+/* Source animation faces/walks right by default. Mirror it while walking
+   in (right to left) so it visibly faces the direction of travel; the
+   unmirrored default is correct for walking back out (left to right). */
+.character-animation.mirrored {
+  transform: scaleX(-1);
+}
+
 .button-row {
   display: flex;
   gap: 8px;
