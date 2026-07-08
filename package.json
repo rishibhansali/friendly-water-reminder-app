@@ -19,7 +19,7 @@
   "description": "Personal macOS menu bar app that reminds you to drink water, with an animated character popup.",
   "private": true,
   "dependencies": {
-    "electron-store": "^11.0.2",
+    "electron-store": "^8.2.0",
     "lottie-react": "^2.4.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"

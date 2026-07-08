@@ -3,4 +3,5 @@ export interface AppSettings {
   snoozeMinutes: number;
   dailyGoalMl: number;
   launchAtLogin: boolean;
+  remindersEnabled: boolean;
 }

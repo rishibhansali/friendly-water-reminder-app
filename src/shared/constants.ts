@@ -1,3 +1,5 @@
 export const DEFAULT_REMINDER_INTERVAL_MINUTES = 60;
 export const DEFAULT_SNOOZE_MINUTES = 10;
 export const DEFAULT_DAILY_GOAL_ML = 2000;
+export const DEFAULT_LAUNCH_AT_LOGIN = false;
+export const DEFAULT_REMINDERS_ENABLED = true;
