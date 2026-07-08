@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-electron/
+release/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+
+# Logs
+npm-debug.log*
+*.log
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# electron-store persisted data (local app data, not source)
+*.local.json
