@@ -8,8 +8,8 @@ When the timer fires, a small transparent/frameless/always-on-top window slides 
 2D character in from the bottom-right of the screen, settles into an idle loop, then offers
 "Drink Water," "Snooze," and "Settings." Progress and settings persist locally.
 
-**Status:** Tray icon with on/off + launch-at-login toggles is working. No timer, character
-animation, or settings UI yet — see "Current Status" below.
+**Status:** Tray (on/off + launch-at-login toggles) and the main-process reminder scheduler are
+both working. No character overlay window or settings UI yet — see "Current Status" below.
 
 ## Tech Stack
 
@@ -71,8 +71,10 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
 
 - `src/main/` — Electron main process (app lifecycle, tray, windows, IPC handlers, timers).
   Compiled with `tsc` (CommonJS) to `dist/main/`. Currently: `index.ts` (entry, hides dock icon,
-  creates the tray), `tray.ts` (Tray + Menu + handlers), `store.ts` (typed electron-store
-  wrapper), `preload.ts` (empty stub, reserved for future IPC bridge).
+  creates the tray, starts the scheduler), `tray.ts` (Tray + Menu + handlers), `timer.ts`
+  (reminder scheduler — see Architectural Decisions), `notify.ts` (shared console log + native
+  `Notification` helper, used by both `tray.ts` stubs and `timer.ts`), `store.ts` (typed
+  electron-store wrapper), `preload.ts` (empty stub, reserved for future IPC bridge).
 - `src/renderer/` — React UI, built with Vite to `dist/renderer/`. Contains `index.html`,
   `main.tsx` (React entry), and components.
 - `src/shared/` — Code and types used by both processes (constants, `AppSettings` shape, etc.).
@@ -96,12 +98,40 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
   a real image later via `nativeImage.createFromPath`). The dropdown is a native
   `Menu.buildFromTemplate`, not a BrowserWindow: two checkbox items ("Reminders On",
   "Launch at Login") that write straight through to `store.ts` on click, then Set Goal / Remind
-  me in 10 min (stubs — `console.log` + a native `Notification`, intentionally non-blocking, no
+  me in 10 min (stubs — call `notify()` from `notify.ts`, intentionally non-blocking, no
   `dialog.showMessageBox`), then Quit. All settings reads/writes for the tray go through
-  `settingsStore` in `store.ts` — don't instantiate a second `electron-store` elsewhere.
-- **Timer:** A single countdown timer lives in the main process (not per-window), since it must
-  keep running whether or not the character popup window exists. Default interval: 60 min,
-  configurable in Settings, persisted via electron-store.
+  `settingsStore` in `store.ts` — don't instantiate a second `electron-store` elsewhere. The
+  tray's "Remind me in 10 min" stub is independent of the real scheduler's `snooze()` — it isn't
+  wired to `timer.ts` yet (no UI wiring until the Character Overlay Window exists to trigger it).
+- **Timer / reminder scheduler (`src/main/timer.ts`):** A single countdown lives in the main
+  process (not per-window, and not owned by the tray), since it must keep running regardless of
+  whether any window exists. It holds one `NodeJS.Timeout` reference (`pendingFire`) and exposes
+  three functions:
+  - `startScheduler()` — called once from `index.ts` on app launch. Schedules the first
+    countdown from `reminderIntervalMinutes` (if `remindersEnabled`), then subscribes to
+    `settingsStore.onDidChange('remindersEnabled', ...)` so toggling the tray checkbox
+    starts/stops the scheduler live, without `tray.ts` and `timer.ts` needing to know about each
+    other directly — the store is the only coupling between them.
+  - `drinkWater()` — clears any pending timer and reschedules a fresh full interval.
+  - `snooze()` — clears any pending timer and reschedules using `snoozeMinutes` instead.
+
+  These are the exact two functions the Character Overlay Window's "Drink Water" and "Snooze"
+  buttons will call later — that feature is pure wiring (IPC → these functions), not new
+  scheduling logic. Right now, since no overlay window exists, a fired reminder just calls
+  `notify()` and then sits idle until something (currently only a manual call, later the overlay)
+  invokes `drinkWater()`/`snooze()` — there's no auto-repeat.
+
+  Re-enabling after being toggled off always starts a **fresh full interval**, never resumes
+  remaining time from before it was disabled (deliberate simplicity — no need to persist/track
+  elapsed time across the off period). Likewise, if `reminderIntervalMinutes` is ever changed
+  (once Settings exists) while a countdown is already running, that countdown finishes on
+  whatever value was in effect when it was scheduled; the new value only applies to the next
+  cycle. Both of these are intentional, not gaps to revisit.
+
+  `clearPending()` runs unconditionally at the top of every reschedule path (including when
+  `remindersEnabled` is false), so there's no scenario where a timer keeps running silently after
+  being disabled — verified directly (see Testing below).
+
 - **Character popup window lifecycle:** Created (or shown) only when the timer fires; it is
   transparent, frameless, always-on-top, and positioned at the bottom-right of the screen. It
   should be hidden (not destroyed) after Drink Water/Snooze so re-showing it is cheap — destroy
@@ -127,6 +157,18 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
   instance, then call each `MenuItem`'s own `.click()` (not a manual `.checked` flip — `.click()`
   already auto-toggles checkbox/radio items, so also flipping `.checked` yourself double-toggles
   and silently cancels out). See git history around the Tray feature commit for a worked example.
+  For timing-sensitive main-process logic (the scheduler), a throwaway script requiring the
+  compiled `dist/main/*.js` directly, driven with real (short) delays via `setTimeout`/`await
+sleep(...)`, is the way to verify async behavior for real rather than reasoning about it —
+  this caught nothing wrong here, but it's how `electron-store`'s `onDidChange` was confirmed to
+  fire synchronously within `.set()` (see `conf`'s source: the `store` setter calls
+  `this.events.emit('change')` synchronously after writing), so there's no race between `tray.ts`
+  writing a setting and `timer.ts` reacting to it.
+- **Electron's exported classes (`Notification`, etc.) are not configurable** —
+  `Object.defineProperty(electron, 'Notification', ...)` throws `TypeError: Cannot redefine
+property`. Don't try to monkey-patch them directly in a test harness; instead intercept at a
+  layer you control (e.g. wrap `console.log` to count the log line your own code emits before
+  calling the Electron API).
 
 ## Current Status
 
@@ -145,10 +187,18 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
       enabled/disabled in both directions). **Not yet verified via a real logout/restart** — see
       "Launch-at-login only fully works once packaged" above; that end-to-end test is only
       meaningful after `electron-builder` packaging exists.
-- [ ] Main-process countdown timer — not started.
+- [x] Main-process reminder scheduler (`src/main/timer.ts`) — `startScheduler()` /
+      `drinkWater()` / `snooze()` implemented and verified with a real (short-interval) exercise
+      script requiring the compiled module directly: fires on interval when enabled, `snooze()`
+      and `drinkWater()` correctly reschedule, disabling mid-countdown clears the pending timer
+      with no leak, re-enabling starts a fresh full interval, and `onDidChange` fires exactly
+      once per `.set()` call with no double-fire. Not yet wired to any UI — `drinkWater()`/
+      `snooze()` are only called manually/by tests right now; the Character Overlay Window will
+      call them for real.
 - [ ] Transparent/frameless/always-on-top character popup window — not started.
 - [ ] Lottie character animation (slide-in + idle loop) — not started.
-- [ ] Drink Water / Snooze / Settings actions and IPC wiring — not started.
+- [ ] Drink Water / Snooze / Settings actions and IPC wiring — not started (the main-process
+      functions exist; connecting them to a UI is the remaining work).
 - [ ] Settings panel UI — not started.
 - [ ] electron-store schema for daily drink-log progress (settings schema exists; progress
       tracking doesn't yet) — not started.

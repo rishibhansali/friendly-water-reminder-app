@@ -1,17 +1,11 @@
-import { app, Menu, nativeImage, Notification, Tray } from 'electron';
+import { app, Menu, nativeImage, Tray } from 'electron';
 import { settingsStore } from './store';
+import { notify } from './notify';
 
 let tray: Tray | null = null;
 
 function applyLoginItemSettings(launchAtLogin: boolean): void {
   app.setLoginItemSettings({ openAtLogin: launchAtLogin });
-}
-
-function notifyStub(title: string, body: string): void {
-  console.log(`[tray] ${title}: ${body}`);
-  if (Notification.isSupported()) {
-    new Notification({ title, body }).show();
-  }
 }
 
 function buildMenu(): Menu {
@@ -37,13 +31,13 @@ function buildMenu(): Menu {
     {
       label: 'Set Goal…',
       click: () => {
-        notifyStub('Set Goal', 'Goal settings are coming soon.');
+        notify('Set Goal', 'Goal settings are coming soon.');
       },
     },
     {
       label: 'Remind me in 10 min',
       click: () => {
-        notifyStub('Snooze', 'Reminder snoozed for 10 minutes (stub — no timer yet).');
+        notify('Snooze', 'Reminder snoozed for 10 minutes (stub — no timer yet).');
       },
     },
     { type: 'separator' },
