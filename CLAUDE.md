@@ -96,19 +96,22 @@ so if the OS's trust check doesn't pass, it just silently declines — no crash,
 what was observed. Apple's own policy since macOS 10.15 also ties Developer ID signing and
 notarization together for Gatekeeper trust (a cert alone, unnotarized, still isn't fully trusted).
 
-**Conclusion: treat this as a known constraint of staying unsigned, not an open bug.** The
-well-established fix, per both Apple's policy and community reports, is a real Developer ID
+**Conclusion: treat this as a known constraint of staying unsigned, not an open bug — confirmed,
+no free workaround exists.** `xattr -l` on the `.app` after a fresh copy into `/Applications`
+shows only `com.apple.provenance`, no `com.apple.quarantine` at all — a locally `electron-builder`
+-built app that's only ever been moved within the same Mac (never downloaded from the internet)
+never picks up the classic quarantine flag in the first place, so there's nothing there to strip.
+This rules out the one cheap thing that was worth trying. The blocker isn't an extended
+attribute — it's that the login-item/launchd auto-launch path checks code-signing trust with no
+interactive override available, and an ad-hoc signature doesn't pass that check.
+
+The well-established fix, per both Apple's policy and community reports, is a real Developer ID
 certificate ($99/year Apple Developer Program) **plus notarization** (`xcrun notarytool`,
-scriptable via an `electron-builder` `afterSign` hook) — signing alone isn't sufficient on its
-own since 10.15. This project deliberately stays unsigned/unnotarized per its original scope
-(personal tool, not App Store/Gatekeeper-distributed), so **silent auto-launch-at-login is
-accepted as not working** unless that scope changes. One cheap thing worth trying before paying
-for a cert, if this is ever revisited: check specifically for `com.apple.quarantine` (not just
-`com.apple.provenance`) via `xattr -l` on the installed `.app` and strip it if present — Apple's
-own forums cite `launchd` explicitly refusing to execute quarantined login items, and this is a
-different attribute than the one already tested. A local `electron-builder` build may not carry
-classic quarantine at all, though, in which case this wouldn't help and Developer ID + notarization
-is the only real fix.
+scriptable via an `electron-builder` `afterSign` hook) — signing alone isn't sufficient on its own
+since 10.15. This project deliberately stays unsigned/unnotarized per its original scope (personal
+tool, not App Store/Gatekeeper-distributed), so **silent auto-launch-at-login is accepted as not
+working** unless that scope changes — a cost/effort decision, not something left to keep chasing
+in code.
 
 ## Packaging
 
@@ -605,15 +608,15 @@ http://localhost:9222/json` lists open pages/windows (each `BrowserWindow`'s loa
       new fields on next launch (no manual migration needed).
 
       **This surfaced a real, previously-shipped bug**, unrelated to progress tracking itself:
-                              `index.ts` had no `window-all-closed` handler, so Electron's default behavior would quit the
-                              entire app the first time a user closed the Settings window before the overlay had ever
-                              been created (e.g. opening Settings from the tray before any reminder had fired) — zero
-                              windows open, no handler, app (and tray icon) gone. Fixed with a no-op handler; see
-                              Architectural Decisions and Testing above for how it was caught and confirmed fixed.
+                                  `index.ts` had no `window-all-closed` handler, so Electron's default behavior would quit the
+                                  entire app the first time a user closed the Settings window before the overlay had ever
+                                  been created (e.g. opening Settings from the tray before any reminder had fired) — zero
+                                  windows open, no handler, app (and tray icon) gone. Fixed with a no-op handler; see
+                                  Architectural Decisions and Testing above for how it was caught and confirmed fixed.
 
-                              **This completes the original core loop end-to-end**: tray → timer fires → overlay shows →
-                              Drink Water/Snooze act on the real scheduler and now persist progress → Settings configures
-                              everything, including viewing that same progress.
+                                  **This completes the original core loop end-to-end**: tray → timer fires → overlay shows →
+                                  Drink Water/Snooze act on the real scheduler and now persist progress → Settings configures
+                                  everything, including viewing that same progress.
 
 - [x] `electron-builder` packaging (`electron-builder.yml`, `npm run package`) — produces a real
       standalone `Friendly Water Reminder.app` (no signing/notarization, `mac.target: dir`, no
@@ -645,7 +648,7 @@ http://localhost:9222/json` lists open pages/windows (each `BrowserWindow`'s loa
       `settled` class alone was misleading, since the class flips almost instantly while the CSS
       transition itself takes seconds). Also fixed the overlay only appearing on the bare desktop
       and disappearing when switching apps: added `setVisibleOnAllWorkspaces(true, {
-  visibleOnFullScreen: true })` and bumped to the `'screen-saver'` always-on-top level, plus
+visibleOnFullScreen: true })` and bumped to the `'screen-saver'` always-on-top level, plus
       switched `show()` to `showInactive()` so it doesn't steal keyboard focus from whatever app
       is active. Verified programmatically that the window reports the correct
       workspace/always-on-top/focus state; **the actual "floats above a real fullscreen app /
