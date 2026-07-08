@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, screen } from 'electron';
 import path from 'node:path';
 import { registerFireHandler, drinkWater, snooze } from './timer';
 import { openSettingsWindow } from './settings';
+import { recordDrink } from './progress';
 
 const WINDOW_WIDTH = 320;
 const WINDOW_HEIGHT = 260;
@@ -94,6 +95,7 @@ export function initOverlay(): void {
 
   ipcMain.on('overlay:drink-water', () => {
     console.log('[overlay] Drink Water clicked.');
+    recordDrink();
     drinkWater();
     hideOverlay();
   });

@@ -33,3 +33,10 @@ body,
   align-items: center;
   gap: 8px;
 }
+
+.settings-root .progress-line {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+}

@@ -1,8 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { EditableSettings } from '../shared/types';
+import type { EditableSettings, TodaysProgress } from '../shared/types';
 
 contextBridge.exposeInMainWorld('settingsBridge', {
   getSettings: (): Promise<EditableSettings> => ipcRenderer.invoke('settings:get'),
+  getProgress: (): Promise<TodaysProgress> => ipcRenderer.invoke('settings:get-progress'),
   setReminderInterval: (minutes: number) =>
     ipcRenderer.send('settings:set-reminder-interval', minutes),
   setDailyGoal: (ml: number) => ipcRenderer.send('settings:set-daily-goal', ml),

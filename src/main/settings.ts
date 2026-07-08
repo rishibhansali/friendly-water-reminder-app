@@ -2,7 +2,8 @@ import { BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import { settingsStore } from './store';
 import { applyLaunchAtLogin } from './launch-at-login';
-import type { EditableSettings } from '../shared/types';
+import { getTodaysProgress } from './progress';
+import type { EditableSettings, TodaysProgress } from '../shared/types';
 
 let settingsWindow: BrowserWindow | null = null;
 
@@ -48,6 +49,8 @@ export function initSettings(): void {
       launchAtLogin: settingsStore.get('launchAtLogin'),
     };
   });
+
+  ipcMain.handle('settings:get-progress', (): TodaysProgress => getTodaysProgress());
 
   ipcMain.on('settings:set-reminder-interval', (_event, minutes: number) => {
     if (!isPositiveNumber(minutes)) {

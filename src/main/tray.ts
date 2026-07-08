@@ -3,11 +3,19 @@ import { settingsStore } from './store';
 import { notify } from './notify';
 import { applyLaunchAtLogin } from './launch-at-login';
 import { openSettingsWindow } from './settings';
+import { getTodaysProgress } from './progress';
 
 let tray: Tray | null = null;
 
 function buildMenu(): Menu {
+  const { drinksToday, goalDrinks } = getTodaysProgress();
+
   return Menu.buildFromTemplate([
+    {
+      label: `${drinksToday} / ${goalDrinks} today`,
+      enabled: false,
+    },
+    { type: 'separator' },
     {
       label: 'Reminders On',
       type: 'checkbox',

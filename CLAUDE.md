@@ -8,8 +8,9 @@ When the timer fires, a small transparent/frameless/always-on-top window slides 
 2D character in from the bottom-right of the screen, settles into an idle loop, then offers
 "Drink Water," "Snooze," and "Settings." Progress and settings persist locally.
 
-**Status:** Tray, the reminder scheduler, the Character Overlay Window, and the Settings window
-are all working. Only daily progress persistence is left before the core loop is complete — see
+**Status:** The full original core loop is complete — Tray, reminder scheduler, Character Overlay
+Window, Settings window, and daily progress persistence all working end-to-end. Remaining work is
+polish (real character art/Lottie, a real tray icon, `electron-builder` packaging) — see
 "Current Status" below.
 
 ## Tech Stack
@@ -77,7 +78,8 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
   initializes settings, creates the tray, initializes the overlay, starts the scheduler),
   `tray.ts` (Tray + Menu + handlers), `timer.ts` (reminder scheduler — see Architectural
   Decisions), `overlay.ts` (Character Overlay Window — see Architectural Decisions), `settings.ts`
-  (Settings window — see Architectural Decisions), `launch-at-login.ts` (the one function that
+  (Settings window — see Architectural Decisions), `progress.ts` (daily drink-count persistence
+  and day-rollover — see Architectural Decisions), `launch-at-login.ts` (the one function that
   calls `app.setLoginItemSettings`, shared by `tray.ts` and `settings.ts` so there's exactly one
   place that touches the OS-level login item registration), `notify.ts` (shared console log +
   native `Notification` helper, used by `tray.ts`'s remaining stub and `timer.ts`), `store.ts`
@@ -108,11 +110,12 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
   shared channel branching on a payload — e.g. `overlay:drink-water`, `overlay:snooze`, and
   `overlay:settings` are three separate handlers, so wiring the real Settings window into
   `overlay:settings` only touched that one handler, nothing shared.
-- **`settings:get` uses `ipcMain.handle`/`invoke`, not `send`/`on`** — it's the one place the
-  renderer needs a value _back_ from main (the current settings, to populate the form), so it's
-  the app's only `invoke`-style channel; everything else is fire-and-forget `send`. `Settings.tsx`
-  renders a "Loading…" state until that promise resolves, rather than rendering inputs bound to
-  `undefined` for a frame.
+- **`settings:get` and `settings:get-progress` use `ipcMain.handle`/`invoke`, not `send`/`on`** —
+  they're the only places a renderer needs a value _back_ from main (current settings to populate
+  the form; today's drink count to show alongside it), so they're the app's only `invoke`-style
+  channels; everything else is fire-and-forget `send`. `Settings.tsx` renders a "Loading…" state
+  until the settings promise resolves, rather than rendering inputs bound to `undefined` for a
+  frame.
 - **Tray behavior:** One tray icon for the app's lifetime, built and owned by the main process
   (`src/main/tray.ts`). No icon asset file — `tray.setTitle('💧')` on an empty `nativeImage` is
   used as the placeholder icon (text-only menu bar items are a standard macOS pattern; swap for
@@ -120,8 +123,10 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
   `Menu.buildFromTemplate`, not a BrowserWindow: two checkbox items ("Reminders On",
   "Launch at Login"), a "Settings…" item (opens the Settings window), "Remind me in 10 min" (still
   a stub — independent of the real scheduler's `snooze()`, not wired since there's no UI reason to
-  trigger it from the tray specifically), then Quit. All settings reads/writes for the tray go
-  through `settingsStore` in `store.ts` — don't instantiate a second `electron-store` elsewhere.
+  trigger it from the tray specifically), then Quit. A non-clickable info line ("3 / 8 today",
+  `enabled: false`) sits above everything else, sourced from `progress.ts`. All settings
+  reads/writes for the tray go through `settingsStore` in `store.ts` — don't instantiate a second
+  `electron-store` elsewhere.
   **The menu is rebuilt fresh on every click** (`tray.on('click', () => tray.popUpContextMenu(buildMenu()))`)
   rather than built once via `setContextMenu()` at creation time — checkbox items snapshot their
   `checked` state at build time, so a menu built once would go stale the instant a setting changes
@@ -226,6 +231,37 @@ cluster` wrapper div** (the placeholder box + button row together), not the oute
     reopened. Deliberately out of scope for this task ("keep it simple") — would need
     `webContents.send` pushing updates to whichever window didn't originate the change.
 
+- **Daily progress (`src/main/progress.ts`):** stores a raw drink **count** (`drinksToday`), not
+  ml and not per-drink timestamps — no historical/multi-day tracking, just today's count against
+  a goal, per scope. `lastDrinkDate` (local `YYYY-MM-DD`) is the only other field.
+  - **Day rollover has no scheduled job.** `ensureCurrentDay()` runs at the top of both
+    `recordDrink()` and `getTodaysProgress()` — if `lastDrinkDate` isn't today, it resets
+    `drinksToday` to `0` and updates the date before doing anything else. This is correct even if
+    the app wasn't running at midnight, since the check happens whenever next accessed, not on a
+    timer — exactly the "simplest correct approach" this was scoped to.
+  - **`drinksToday` is a raw count; the ml-based `dailyGoalMl` is converted to a comparable
+    "goal in drinks" only for display**, never stored: `goalDrinks = Math.ceil(dailyGoalMl /
+DEFAULT_SERVING_SIZE_ML)` (`DEFAULT_SERVING_SIZE_ML = 250`, in `shared/constants.ts` — chosen
+    so the default 2000ml goal reads as a clean "8"). **`Math.ceil`, not `floor`/`round`** — e.g.
+    1800ml/250 = 7.2 rounds up to 8, since 7 servings (1750ml) wouldn't actually reach an 1800ml
+    goal; flooring or rounding down would under-count how many servings are actually needed.
+    `Settings.tsx` recomputes `goalDrinks` client-side from the live `dailyGoalMl` field (not a
+    value fetched once from main), so editing the goal updates the displayed ratio immediately
+    without another IPC round-trip.
+  - **`timer.ts` stays scheduling-only** — `recordDrink()` is called from `overlay.ts`'s
+    `overlay:drink-water` handler alongside `timer.drinkWater()`, not folded into
+    `timer.drinkWater()` itself, keeping the same one-concern-per-module split already used
+    between `tray.ts`/`timer.ts` and `overlay.ts`/`timer.ts`.
+
+- **`app.on('window-all-closed', () => {})` in `index.ts` is required, not decorative.** Without
+  it, Electron's default behavior quits the whole app once zero `BrowserWindow`s remain open —
+  which would happen for real the first time a user opens Settings (from the tray, before any
+  reminder has ever fired so the overlay hasn't been lazily created yet) and then closes it with
+  the window's native close button: zero windows open, no handler, app quits, tray icon included.
+  This surfaced during this task's own verification (see Testing below) and predates it — a menu-
+  bar-only app must never quit just because its last visible window closed; only the tray's own
+  Quit item should exit.
+
 ## Conventions
 
 - **Naming:** camelCase for variables/functions, PascalCase for React components and TS
@@ -309,6 +345,15 @@ property`. Don't try to monkey-patch them directly in a test harness; instead in
   finished its first render/effect by the time `executeJavaScript` runs — poll inside the injected
   script itself (a small `resolve`-when-ready loop checking the DOM) rather than adding a fixed
   `sleep` in the outer Node script and hoping it's long enough.
+- **For integration-level verification, `require()` the real compiled `dist/main/index.js`
+  directly instead of manually re-calling `createTray()`/`initOverlay()`/`startScheduler()` etc.
+  in a throwaway script.** Manually reassembling the startup sequence only tests those functions in
+  isolation and can silently skip whatever `index.ts` itself does between them (this is exactly
+  how the `window-all-closed` bug was caught: a harness that called the individual `init*()`
+  functions itself wouldn't have exercised — or caught the absence of — the app-lifecycle handler
+  that only lives in `index.ts`). Set any store state needed _before_ requiring `index.js`, then
+  `await app.whenReady()` again in the harness (safe — it's the same already-resolving promise) to
+  wait for its own `.then()` callback to finish before proceeding.
 
 ## Current Status
 
@@ -374,12 +419,34 @@ property`. Don't try to monkey-patch them directly in a test harness; instead in
       the instant any setting changed from elsewhere. Fixed by rebuilding the menu on every click
       instead (see Architectural Decisions and Testing above) — caught and fixed before shipping,
       not a regression.
+- [x] Daily progress / drink-log persistence (`src/main/progress.ts`) — `drinksToday` (raw count) + `lastDrinkDate` in the store, day rollover via `ensureCurrentDay()` checked at every
+      read/write rather than a scheduled midnight job. Surfaced in both the tray dropdown (a
+      non-clickable "N / M today" line) and the Settings window (a read-only line above the
+      form, live-recomputed from the goal field). `recordDrink()` is called from `overlay.ts`'s
+      Drink Water handler alongside (not inside) `timer.drinkWater()`, keeping `timer.ts`
+      scheduling-only. Verified end-to-end, including a real Drink Water click through the actual
+      running overlay incrementing the store and the tray reflecting it, plus specifically the
+      `Math.ceil` rounding behavior you flagged (1800ml goal → displays as a goal of 8 servings,
+      not 7) and that `electron-store` correctly migrates an existing config file to add the two
+      new fields on next launch (no manual migration needed).
+
+      **This surfaced a real, previously-shipped bug**, unrelated to progress tracking itself:
+          `index.ts` had no `window-all-closed` handler, so Electron's default behavior would quit the
+          entire app the first time a user closed the Settings window before the overlay had ever
+          been created (e.g. opening Settings from the tray before any reminder had fired) — zero
+          windows open, no handler, app (and tray icon) gone. Fixed with a no-op handler; see
+          Architectural Decisions and Testing above for how it was caught and confirmed fixed.
+
+          **This completes the original core loop end-to-end**: tray → timer fires → overlay shows →
+          Drink Water/Snooze act on the real scheduler and now persist progress → Settings configures
+          everything, including viewing that same progress.
+
 - [ ] Lottie character animation (real character art, idle loop) — not started; current
       placeholder is a plain colored box plus plain buttons.
-- [ ] electron-store schema for daily drink-log progress — not started. Now that Settings exists
-      (with a daily goal field to track progress against), this is the last piece before the core
-      loop is complete.
-- [ ] `electron-builder` packaging — not started (needed to fully verify launch-at-login).
+- [ ] Real tray icon — not started; current placeholder is a 💧 emoji title, no image asset.
+- [ ] `electron-builder` packaging — not started (needed to fully verify launch-at-login with a
+      real logout/restart, and to give the app a stable identity instead of running as raw
+      `Electron.app` from source).
 
 ## Definition of Done
 
