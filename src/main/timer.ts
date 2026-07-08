@@ -2,6 +2,16 @@ import { settingsStore } from './store';
 import { notify } from './notify';
 
 let pendingFire: NodeJS.Timeout | null = null;
+const fireHandlers: Array<() => void> = [];
+
+/**
+ * Lets other main-process modules (e.g. the overlay window) react to a fired
+ * reminder without timer.ts importing them back — keeps this module's only
+ * dependency as settingsStore/notify, never anything UI-related.
+ */
+export function registerFireHandler(handler: () => void): void {
+  fireHandlers.push(handler);
+}
 
 function clearPending(): void {
   if (pendingFire) {
@@ -22,6 +32,9 @@ function fireReminder(): void {
   pendingFire = null;
   console.log('[timer] Reminder fired: time to drink water.');
   notify('Friendly Water Reminder', 'Time to drink water!');
+  for (const handler of fireHandlers) {
+    handler();
+  }
 }
 
 export function drinkWater(): void {

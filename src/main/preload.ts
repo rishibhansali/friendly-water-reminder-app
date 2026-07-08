@@ -1,2 +1,7 @@
-// Preload script: exposes a controlled bridge between main and renderer via
-// contextBridge once IPC channels are defined. Empty for now — scaffold only.
+import { contextBridge, ipcRenderer } from 'electron';
+
+contextBridge.exposeInMainWorld('overlayBridge', {
+  setInteractive: (interactive: boolean) =>
+    ipcRenderer.send('overlay:set-interactive', interactive),
+  requestHide: () => ipcRenderer.send('overlay:hide-request'),
+});

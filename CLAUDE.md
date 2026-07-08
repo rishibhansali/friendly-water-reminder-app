@@ -8,8 +8,9 @@ When the timer fires, a small transparent/frameless/always-on-top window slides 
 2D character in from the bottom-right of the screen, settles into an idle loop, then offers
 "Drink Water," "Snooze," and "Settings." Progress and settings persist locally.
 
-**Status:** Tray (on/off + launch-at-login toggles) and the main-process reminder scheduler are
-both working. No character overlay window or settings UI yet — see "Current Status" below.
+**Status:** Tray, the reminder scheduler, and the Character Overlay Window (placeholder visual,
+no real character art or buttons yet) are all working. No Settings UI yet — see "Current Status"
+below.
 
 ## Tech Stack
 
@@ -71,12 +72,17 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
 
 - `src/main/` — Electron main process (app lifecycle, tray, windows, IPC handlers, timers).
   Compiled with `tsc` (CommonJS) to `dist/main/`. Currently: `index.ts` (entry, hides dock icon,
-  creates the tray, starts the scheduler), `tray.ts` (Tray + Menu + handlers), `timer.ts`
-  (reminder scheduler — see Architectural Decisions), `notify.ts` (shared console log + native
-  `Notification` helper, used by both `tray.ts` stubs and `timer.ts`), `store.ts` (typed
-  electron-store wrapper), `preload.ts` (empty stub, reserved for future IPC bridge).
-- `src/renderer/` — React UI, built with Vite to `dist/renderer/`. Contains `index.html`,
-  `main.tsx` (React entry), and components.
+  creates the tray, initializes the overlay, starts the scheduler), `tray.ts` (Tray + Menu +
+  handlers), `timer.ts` (reminder scheduler — see Architectural Decisions), `overlay.ts`
+  (Character Overlay Window — see Architectural Decisions), `notify.ts` (shared console log +
+  native `Notification` helper, used by `tray.ts` stubs and `timer.ts`), `store.ts` (typed
+  electron-store wrapper), `preload.ts` (`contextBridge` bridge for the overlay window — first
+  real IPC channel in the app; see IPC boundary below).
+- `src/renderer/` — React UI, built with Vite to `dist/renderer/`. `main.tsx` (React entry) mounts
+  `Overlay.tsx` (the Character Overlay Window's content — currently the only renderer entry
+  point; a future Settings panel will need its own window/entry, decide multi-entry-point Vite
+  config vs. a second window at that point), styled by `overlay.css`. `vite-env.d.ts` pulls in
+  Vite's client types (needed for CSS side-effect imports to typecheck).
 - `src/shared/` — Code and types used by both processes (constants, `AppSettings` shape, etc.).
   No Electron or DOM APIs here — keep it environment-agnostic so it's easy to unit test.
 - `dist/` — build output (gitignored).
@@ -90,8 +96,10 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
   directly from the renderer.
 - **IPC boundary:** `src/main/preload.ts` is the only file allowed to use `contextBridge`.
   Renderer code must go through the bridge it exposes — never enable `nodeIntegration` in a
-  `BrowserWindow` to shortcut this. (Preload currently exposes nothing; channels get added as
-  each feature needs them.)
+  `BrowserWindow` to shortcut this. It currently exposes `window.overlayBridge` (`setInteractive`,
+  `requestHide`) for the Character Overlay Window — one bridge object per window's concerns is
+  the pattern; a future Settings window would get its own `window.settingsBridge`-style object
+  rather than everything piling onto one global bridge.
 - **Tray behavior:** One tray icon for the app's lifetime, built and owned by the main process
   (`src/main/tray.ts`). No icon asset file — `tray.setTitle('💧')` on an empty `nativeImage` is
   used as the placeholder icon (text-only menu bar items are a standard macOS pattern; swap for
@@ -132,10 +140,38 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
   `remindersEnabled` is false), so there's no scenario where a timer keeps running silently after
   being disabled — verified directly (see Testing below).
 
-- **Character popup window lifecycle:** Created (or shown) only when the timer fires; it is
-  transparent, frameless, always-on-top, and positioned at the bottom-right of the screen. It
-  should be hidden (not destroyed) after Drink Water/Snooze so re-showing it is cheap — destroy
-  only on app quit. The slide-in-then-idle-loop animation state lives entirely in the renderer.
+- **Character Overlay Window (`src/main/overlay.ts` + `src/renderer/Overlay.tsx`):** Lazily
+  created on the _first_ reminder fire, then reused for the app's lifetime — hidden (`win.hide()`)
+  after each interaction/timeout, never destroyed, so re-showing is instant. `initOverlay()` is
+  called once from `index.ts` and registers `showOverlay` with `timer.ts` via
+  `registerFireHandler` — this is the one and only link between the two modules, and it's
+  one-directional (`overlay.ts` depends on `timer.ts`, never the reverse), so `timer.ts` stays
+  usable/testable with zero UI code.
+  - **Window flags:** `transparent: true, frame: false, alwaysOnTop: true, skipTaskbar: true,
+resizable: false, movable: false`. Size `320×220`, positioned so the window's right/bottom
+    edges sit `20px` inset from the screen's work-area right/bottom edges (`bottomRightPosition()`,
+    computed from `screen.getPrimaryDisplay().workArea` — recomputed on every `showOverlay()`
+    call, not cached, so it stays correct if the display config changes between fires).
+  - **Click-through:** defaults to `setIgnoreMouseEvents(true, { forward: true })` (fully
+    click-through, but mouse-move events still forwarded to the renderer so it can detect hover).
+    The renderer's `mouseenter`/`mouseleave` handlers send `overlay:set-interactive` over IPC;
+    main flips `setIgnoreMouseEvents` accordingly. **These listeners must live on the visible
+    placeholder box itself, not the outer full-window container** — the container fills the
+    whole (mostly transparent) `320×220` window, so binding hover there would make the empty
+    padding around the box block clicks too, defeating the point of click-through. (This was
+    caught and fixed during verification — see Testing below for how.)
+  - **Show resets click-through state unconditionally** (`showOverlay()` always calls
+    `setIgnoreMouseEvents(true, { forward: true })` before `show()`), so a window re-shown while
+    the cursor happens to already be sitting over where the box will render doesn't inherit
+    whatever interactive state it was left in.
+  - **Hide triggers (both temporary stand-ins, marked as such in code comments — replace when
+    Drink Water/Snooze/Settings land):** clicking the placeholder box (`overlay:hide-request`
+    IPC), or a 30s auto-hide timeout (`AUTO_HIDE_MS`) if ignored. Both call the same `hideOverlay()`,
+    which also clears the auto-hide timer so it can't fire again after an already-hidden window.
+  - **Placeholder visual:** a plain rounded box (`overlay.css`), CSS `transform: translateX(150%)
+→ translateX(0)` on mount — slides in from the window's right edge, which sits at the
+    screen's right edge, so it reads as sliding in from off-screen. No idle loop, no Lottie —
+    that's a separate future task.
 
 ## Conventions
 
@@ -169,6 +205,21 @@ sleep(...)`, is the way to verify async behavior for real rather than reasoning 
 property`. Don't try to monkey-patch them directly in a test harness; instead intercept at a
   layer you control (e.g. wrap `console.log` to count the log line your own code emits before
   calling the Electron API).
+- **Driving real mouse input for window/click-through testing, without Screen Recording
+  permission:** `screencapture` and any pixel-capture approach may be blocked for whichever host
+  process is running the shell, even with Accessibility access granted — that's a separate macOS
+  permission. Injecting _synthetic mouse events_ only needs Accessibility, though, and doesn't
+  need a screenshot to verify: compile a tiny Swift script with `swiftc` that posts
+  `CGEvent(mouseEventSource:mouseType:mouseCursorPosition:mouseButton:)` (`.mouseMoved`,
+  `.leftMouseDown`/`.leftMouseUp`) via `.post(tap: .cghidEventTap)`, `swift` is preinstalled on
+  macOS via Xcode command line tools. Confirm it's actually moving the real cursor by reading
+  `CGEvent(source: nil)?.location` before/after. Combined with computing the target window's
+  on-screen rect from the same constants the main-process code uses (window position + CSS
+  layout), this is how the overlay's click-through region was verified for real — moving the
+  synthetic cursor into empty (padding) space produced no log output (correctly ignored), moving
+  it onto the visible box triggered `set-interactive: true` (and this is exactly what caught the
+  hover-listener-on-the-wrong-element bug above — the first version logged `set-interactive: true`
+  even when hovering empty padding, since the listener was on the full-window container).
 
 ## Current Status
 
@@ -195,10 +246,25 @@ property`. Don't try to monkey-patch them directly in a test harness; instead in
       once per `.set()` call with no double-fire. Not yet wired to any UI — `drinkWater()`/
       `snooze()` are only called manually/by tests right now; the Character Overlay Window will
       call them for real.
-- [ ] Transparent/frameless/always-on-top character popup window — not started.
-- [ ] Lottie character animation (slide-in + idle loop) — not started.
-- [ ] Drink Water / Snooze / Settings actions and IPC wiring — not started (the main-process
-      functions exist; connecting them to a UI is the remaining work).
+- [x] Character Overlay Window (`src/main/overlay.ts` + `src/renderer/Overlay.tsx`) — transparent/
+      frameless/always-on-top/skipTaskbar window, lazily created on first fire and reused
+      thereafter, positioned bottom-right (20px inset from work-area edges), placeholder box
+      slides in via CSS. Click-through everywhere except the visible box; hides on click
+      (temporary stand-in) or a 30s auto-hide timeout (also temporary). Verified end-to-end on
+      the real running app: fire → window shows at the exact computed screen coordinates,
+      hovering the box enables interaction, hovering empty window padding correctly stays
+      click-through (a bug where the hover listener was on the wrong element was caught and
+      fixed during this verification — see Testing above), clicking the box hides it, and the
+      30s auto-hide timeout fires correctly when ignored. Not independently confirmed by eye that
+      the slide-in CSS animation _visually_ plays (no Screen Recording permission for a
+      screenshot) — the mechanism is a standard unconditional CSS transition on mount, low risk,
+      but worth a glance from you if you want to eyeball it.
+- [ ] Lottie character animation (real character art, idle loop) — not started; current
+      placeholder is a plain colored box.
+- [ ] Drink Water / Snooze / Settings actions and real IPC wiring — not started. The main-process
+      functions (`drinkWater()`, `snooze()`) and the overlay's click-through/show/hide plumbing
+      both exist; this task replaces the two temporary stand-ins (click-anywhere-to-hide, 30s
+      auto-hide) with real buttons that call `drinkWater()`/`snooze()`/open Settings.
 - [ ] Settings panel UI — not started.
 - [ ] electron-store schema for daily drink-log progress (settings schema exists; progress
       tracking doesn't yet) — not started.
