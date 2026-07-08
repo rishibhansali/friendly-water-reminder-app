@@ -63,16 +63,46 @@ instead of the API object, and `app`/`BrowserWindow` will be `undefined`. Fix: r
 `env -u ELECTRON_RUN_AS_NODE npm start` (or unset it in the shell) when testing from such a
 terminal. A real user's Terminal.app/iTerm session does not have this var set.
 
-### Launch-at-login in dev mode vs. packaged
+### Launch-at-login: known constraint of staying unsigned
 
 `app.setLoginItemSettings` / the "Launch at Login" toggle correctly registers/unregisters the app
 with macOS's Background Task Management (verified directly with `sfltool dumpbtm` — toggling
-flips the entry's `Disposition` between `enabled` and `disabled`). In **dev mode**
-(`npm start`/`npm run dev`), the registered login item points at the raw
-`node_modules/electron/dist/Electron.app` binary with no argument telling it to load this
-project — `getLoginItemSettings()` confirms this via `executableWillLaunchAtLogin: false`. A real
-login would launch bare Electron, not this app. That's expected, not a bug — it's specifically
-why packaging (below) was needed before this could be fully verified with a real logout/login.
+flips the entry's `Disposition` between `enabled` and `disabled`, and it shows up correctly in
+System Settings → Login Items & Extensions). In **dev mode** (`npm start`/`npm run dev`), the
+registered login item points at the raw `node_modules/electron/dist/Electron.app` binary with no
+argument telling it to load this project — `getLoginItemSettings()` confirms this via
+`executableWillLaunchAtLogin: false`. That part was always expected, not a bug.
+
+**With the packaged, ad-hoc-signed `.app` installed to `/Applications`, a real logout/login was
+tested and the app does _not_ auto-launch** — registration succeeds and shows correctly in Login
+Items, but nothing starts silently: no process (`ps aux`), no crash log, no entry in Console.app
+at all around the login timestamp. Manually opening the app works fine (after the one-time
+right-click-Open Gatekeeper override). Stripping the `com.apple.provenance` extended attribute
+(a newer, Sequoia-era origin-tracking flag, distinct from classic `com.apple.quarantine`) did not
+fix it.
+
+This matches a widely-reported pattern, not just this project: Electron's own issue tracker has
+multiple reports of `setLoginItemSettings({ openAtLogin: true })` silently failing to auto-launch
+for unsigned/ad-hoc/improperly-signed builds, with the item still showing as "enabled." The likely
+mechanism: manually opening an app via Finder gets an _interactive_ Gatekeeper override (the
+right-click bypass); the login-item/launchd auto-launch path has no interactive prompt available,
+so if the OS's trust check doesn't pass, it just silently declines — no crash, no log, exactly
+what was observed. Apple's own policy since macOS 10.15 also ties Developer ID signing and
+notarization together for Gatekeeper trust (a cert alone, unnotarized, still isn't fully trusted).
+
+**Conclusion: treat this as a known constraint of staying unsigned, not an open bug.** The
+well-established fix, per both Apple's policy and community reports, is a real Developer ID
+certificate ($99/year Apple Developer Program) **plus notarization** (`xcrun notarytool`,
+scriptable via an `electron-builder` `afterSign` hook) — signing alone isn't sufficient on its
+own since 10.15. This project deliberately stays unsigned/unnotarized per its original scope
+(personal tool, not App Store/Gatekeeper-distributed), so **silent auto-launch-at-login is
+accepted as not working** unless that scope changes. One cheap thing worth trying before paying
+for a cert, if this is ever revisited: check specifically for `com.apple.quarantine` (not just
+`com.apple.provenance`) via `xattr -l` on the installed `.app` and strip it if present — Apple's
+own forums cite `launchd` explicitly refusing to execute quarantined login items, and this is a
+different attribute than the one already tested. A local `electron-builder` build may not carry
+classic quarantine at all, though, in which case this wouldn't help and Developer ID + notarization
+is the only real fix.
 
 ## Packaging
 
@@ -421,9 +451,13 @@ http://localhost:9222/json` lists open pages/windows (each `BrowserWindow`'s loa
 - [x] Auto-launch at login — `launchAtLogin` toggle wired to `app.setLoginItemSettings`,
       persisted via electron-store, and the underlying OS registration verified directly with
       `sfltool dumpbtm` (toggling flips Background Task Management's disposition between
-      enabled/disabled in both directions). Dev-mode-vs-packaged distinction documented above.
-      **Real logout/login confirmation with the packaged app: pending — update this line once
-      you've confirmed it.**
+      enabled/disabled in both directions) and in System Settings → Login Items & Extensions.
+      **Registration works; silent auto-launch at a real login does not** — tested with the
+      packaged, ad-hoc-signed `.app` via a real logout/login: the item shows enabled, but nothing
+      starts (no process, no crash log, no Console.app entry). This is a known constraint of
+      staying unsigned/unnotarized, not an open bug — see "Launch-at-login: known constraint of
+      staying unsigned" above for the reasoning, sources, and the Developer ID + notarization
+      fix (a cost/scope decision, not something to keep chasing in code).
 - [x] Main-process reminder scheduler (`src/main/timer.ts`) — `startScheduler()` /
       `drinkWater()` / `snooze()` implemented and verified with a real (short-interval) exercise
       script requiring the compiled module directly: fires on interval when enabled, `snooze()`
@@ -483,15 +517,15 @@ http://localhost:9222/json` lists open pages/windows (each `BrowserWindow`'s loa
       new fields on next launch (no manual migration needed).
 
       **This surfaced a real, previously-shipped bug**, unrelated to progress tracking itself:
-              `index.ts` had no `window-all-closed` handler, so Electron's default behavior would quit the
-              entire app the first time a user closed the Settings window before the overlay had ever
-              been created (e.g. opening Settings from the tray before any reminder had fired) — zero
-              windows open, no handler, app (and tray icon) gone. Fixed with a no-op handler; see
-              Architectural Decisions and Testing above for how it was caught and confirmed fixed.
+                  `index.ts` had no `window-all-closed` handler, so Electron's default behavior would quit the
+                  entire app the first time a user closed the Settings window before the overlay had ever
+                  been created (e.g. opening Settings from the tray before any reminder had fired) — zero
+                  windows open, no handler, app (and tray icon) gone. Fixed with a no-op handler; see
+                  Architectural Decisions and Testing above for how it was caught and confirmed fixed.
 
-              **This completes the original core loop end-to-end**: tray → timer fires → overlay shows →
-              Drink Water/Snooze act on the real scheduler and now persist progress → Settings configures
-              everything, including viewing that same progress.
+                  **This completes the original core loop end-to-end**: tray → timer fires → overlay shows →
+                  Drink Water/Snooze act on the real scheduler and now persist progress → Settings configures
+                  everything, including viewing that same progress.
 
 - [x] `electron-builder` packaging (`electron-builder.yml`, `npm run package`) — produces a real
       standalone `Friendly Water Reminder.app` (no signing/notarization, `mac.target: dir`, no
@@ -499,10 +533,10 @@ http://localhost:9222/json` lists open pages/windows (each `BrowserWindow`'s loa
       same synthetic-input technique used throughout: tray/timer/overlay/settings/progress all
       initialize and function identically to `npm start`, inside the packaged `app.asar` — a real
       concern for a first packaging pass (preload paths, asar-relative resource paths), and
-      nothing broke. **The one thing I can't do myself: a real logout/login test** to confirm the
-      packaged app actually relaunches at login (as opposed to the dev-mode limitation documented
-      above) — that's a genuinely disruptive action to trigger from here, so it's on you. Once
-      confirmed, update the Launch-at-login status line above.
+      nothing broke. **Real logout/login test completed** (by the user, not this agent — see
+      "Launch-at-login: known constraint of staying unsigned" above): Launch at Login registers
+      correctly but does not silently auto-launch with this unsigned/ad-hoc-signed build. Resolved
+      as a documented, accepted constraint rather than an open bug.
 - [ ] Lottie character animation (real character art, idle loop) — not started; current
       placeholder is a plain colored box plus plain buttons.
 - [ ] Real tray icon — not started; current placeholder is a 💧 emoji title, no image asset.
