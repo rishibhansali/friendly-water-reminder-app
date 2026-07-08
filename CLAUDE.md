@@ -9,8 +9,8 @@ When the timer fires, a small transparent/frameless/always-on-top window slides 
 "Drink Water," "Snooze," and "Settings." Progress and settings persist locally.
 
 **Status:** Tray, the reminder scheduler, and the Character Overlay Window (placeholder visual,
-no real character art or buttons yet) are all working. No Settings UI yet — see "Current Status"
-below.
+real Drink Water / Snooze / Settings-stub buttons) are all working. No Settings UI or daily
+progress persistence yet — see "Current Status" below.
 
 ## Tech Stack
 
@@ -97,9 +97,13 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
 - **IPC boundary:** `src/main/preload.ts` is the only file allowed to use `contextBridge`.
   Renderer code must go through the bridge it exposes — never enable `nodeIntegration` in a
   `BrowserWindow` to shortcut this. It currently exposes `window.overlayBridge` (`setInteractive`,
-  `requestHide`) for the Character Overlay Window — one bridge object per window's concerns is
-  the pattern; a future Settings window would get its own `window.settingsBridge`-style object
-  rather than everything piling onto one global bridge.
+  `drinkWater`, `snooze`, `openSettings`) for the Character Overlay Window — one bridge object per
+  window's concerns is the pattern; a future Settings window would get its own
+  `window.settingsBridge`-style object rather than everything piling onto one global bridge. Each
+  of the three action methods is its own IPC channel (`overlay:drink-water`, `overlay:snooze`,
+  `overlay:settings`) with its own `ipcMain.on` handler — deliberately not one shared
+  `overlay:action` channel branching on a payload, so wiring up the real Settings window later
+  only touches the `overlay:settings` handler, not a shared one all three actions run through.
 - **Tray behavior:** One tray icon for the app's lifetime, built and owned by the main process
   (`src/main/tray.ts`). No icon asset file — `tray.setTitle('💧')` on an empty `nativeImage` is
   used as the placeholder icon (text-only menu bar items are a standard macOS pattern; swap for
@@ -124,10 +128,10 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
   - `snooze()` — clears any pending timer and reschedules using `snoozeMinutes` instead.
 
   These are the exact two functions the Character Overlay Window's "Drink Water" and "Snooze"
-  buttons will call later — that feature is pure wiring (IPC → these functions), not new
-  scheduling logic. Right now, since no overlay window exists, a fired reminder just calls
-  `notify()` and then sits idle until something (currently only a manual call, later the overlay)
-  invokes `drinkWater()`/`snooze()` — there's no auto-repeat.
+  buttons call — that turned out to be pure wiring (IPC → these functions), no new scheduling
+  logic needed, exactly as planned. A fired reminder calls `notify()` (kept as a fallback even
+  now that the overlay exists) and then sits idle until `drinkWater()`/`snooze()` is invoked
+  (via the overlay's buttons, or a test) — there's no auto-repeat.
 
   Re-enabling after being toggled off always starts a **fresh full interval**, never resumes
   remaining time from before it was disabled (deliberate simplicity — no need to persist/track
@@ -148,30 +152,43 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
   one-directional (`overlay.ts` depends on `timer.ts`, never the reverse), so `timer.ts` stays
   usable/testable with zero UI code.
   - **Window flags:** `transparent: true, frame: false, alwaysOnTop: true, skipTaskbar: true,
-resizable: false, movable: false`. Size `320×220`, positioned so the window's right/bottom
-    edges sit `20px` inset from the screen's work-area right/bottom edges (`bottomRightPosition()`,
-    computed from `screen.getPrimaryDisplay().workArea` — recomputed on every `showOverlay()`
-    call, not cached, so it stays correct if the display config changes between fires).
+resizable: false, movable: false`. Size `320×260` (bumped from an initial `320×220` to fit the
+    button row), positioned so the window's right/bottom edges sit `20px` inset from the screen's
+    work-area right/bottom edges (`bottomRightPosition()`, computed from
+    `screen.getPrimaryDisplay().workArea` — recomputed on every `showOverlay()` call, not cached,
+    so it stays correct if the display config changes between fires).
   - **Click-through:** defaults to `setIgnoreMouseEvents(true, { forward: true })` (fully
     click-through, but mouse-move events still forwarded to the renderer so it can detect hover).
     The renderer's `mouseenter`/`mouseleave` handlers send `overlay:set-interactive` over IPC;
-    main flips `setIgnoreMouseEvents` accordingly. **These listeners must live on the visible
-    placeholder box itself, not the outer full-window container** — the container fills the
-    whole (mostly transparent) `320×220` window, so binding hover there would make the empty
-    padding around the box block clicks too, defeating the point of click-through. (This was
-    caught and fixed during verification — see Testing below for how.)
+    main flips `setIgnoreMouseEvents` accordingly. **These listeners live on the `.interactive-
+cluster` wrapper div** (the placeholder box + button row together), not the outer full-window
+    container — the container fills the whole (mostly transparent) `320×260` window, so binding
+    hover there would make the empty padding block clicks too, defeating the point of
+    click-through. (Caught and fixed during the Character Overlay Window task's own verification
+    — see Testing below.)
   - **Show resets click-through state unconditionally** (`showOverlay()` always calls
     `setIgnoreMouseEvents(true, { forward: true })` before `show()`), so a window re-shown while
     the cursor happens to already be sitting over where the box will render doesn't inherit
     whatever interactive state it was left in.
-  - **Hide triggers (both temporary stand-ins, marked as such in code comments — replace when
-    Drink Water/Snooze/Settings land):** clicking the placeholder box (`overlay:hide-request`
-    IPC), or a 30s auto-hide timeout (`AUTO_HIDE_MS`) if ignored. Both call the same `hideOverlay()`,
+  - **Three buttons, three IPC channels, three handlers:** Drink Water calls `timer.drinkWater()`
+    then `hideOverlay()`; Snooze calls `timer.snooze()` then `hideOverlay()`; Settings — no
+    Settings window exists yet — logs and calls `notify()` as a stub (same pattern as the tray's
+    existing "Set Goal…" stub), then `hideOverlay()`. Drink Water intentionally does **not**
+    persist anything yet beyond a console log — daily drink-log persistence is its own later task
+    (holding off until Settings exists, so there's a UI to view/set the goal against).
+  - **Hiding:** a real 30s auto-hide fallback (`AUTO_HIDE_MS`) covers the case where the overlay is
+    ignored entirely — the only way it hides now besides clicking one of the three buttons. The
+    earlier "click anywhere hides" stand-in from the previous task is gone; it would have
+    conflicted with clicking a specific button. All hide paths go through the same `hideOverlay()`,
     which also clears the auto-hide timer so it can't fire again after an already-hidden window.
-  - **Placeholder visual:** a plain rounded box (`overlay.css`), CSS `transform: translateX(150%)
-→ translateX(0)` on mount — slides in from the window's right edge, which sits at the
-    screen's right edge, so it reads as sliding in from off-screen. No idle loop, no Lottie —
-    that's a separate future task.
+  - **Placeholder visual:** a plain rounded box plus a row of three plain buttons below it
+    (`overlay.css`), both inside `.interactive-cluster`, which as a whole slides in via CSS
+    `transform: translateX(150%) → translateX(0)` on mount — from the window's right edge, which
+    sits at the screen's right edge, so it reads as sliding in from off-screen. Buttons appear
+    immediately alongside the box rather than after a separate "settle" animation — the original
+    concept describes them appearing once the character settles, but sequencing that is an
+    animation-timing detail out of scope for this task, not attempted here. No idle loop, no
+    Lottie — separate future task.
 
 ## Conventions
 
@@ -220,6 +237,30 @@ property`. Don't try to monkey-patch them directly in a test harness; instead in
   it onto the visible box triggered `set-interactive: true` (and this is exactly what caught the
   hover-listener-on-the-wrong-element bug above — the first version logged `set-interactive: true`
   even when hovering empty padding, since the listener was on the full-window container).
+- **A throwaway script run as `electron <script>.js` does not share the real app's electron-store
+  file.** Electron resolves `app.getName()` (which determines the `userData` path electron-store
+  writes to) from the nearest `package.json` to the entry point — running `electron .` from the
+  project root resolves to `friendly-water-reminder-app`, but running a standalone verification
+  script elsewhere (e.g. in a scratchpad dir with no `package.json`) resolves to the generic
+  `"Electron"`, pointing at a completely different `userData` dir. Pre-editing the real app's
+  `config.json` before launching a scratch script will silently have no effect. Fix: have the
+  script call `settingsStore.set({...})` itself at the top, same as every other exercise script
+  in this project's history — hermetic and immune to this, rather than trying to make the paths
+  match.
+- **`getBoundingClientRect()` reflects in-flight CSS `transform` animations.** Querying a button's
+  screen position for a synthetic click immediately after a window becomes visible can capture a
+  mid-animation (moving) coordinate rather than its final resting position, if anything animates
+  via `transform` on mount (as the overlay's slide-in does) — the position at click-time then
+  differs from the position computed earlier, and the click misses. Wait for the animation
+  duration to elapse before computing click targets from `getBoundingClientRect()`.
+- **Hovering back into an already-`:hover`ed element after hide/show doesn't refire `mouseenter`.**
+  Hiding and re-showing the same (not reloaded) `BrowserWindow` doesn't reset the renderer's DOM
+  hover state — if the synthetic cursor lands back on/near an element it was already considered
+  "inside" from before the hide, no new `mouseenter` fires, so `overlay:set-interactive` never
+  gets resent and the window can stay click-through despite `showOverlay()` having reset it. Move
+  the synthetic cursor to a neutral point outside the interactive area first (forcing a real
+  `mouseleave`), then into the target — mirroring how a real user's cursor naturally arrives from
+  outside the window anyway.
 
 ## Current Status
 
@@ -249,25 +290,32 @@ property`. Don't try to monkey-patch them directly in a test harness; instead in
 - [x] Character Overlay Window (`src/main/overlay.ts` + `src/renderer/Overlay.tsx`) — transparent/
       frameless/always-on-top/skipTaskbar window, lazily created on first fire and reused
       thereafter, positioned bottom-right (20px inset from work-area edges), placeholder box
-      slides in via CSS. Click-through everywhere except the visible box; hides on click
-      (temporary stand-in) or a 30s auto-hide timeout (also temporary). Verified end-to-end on
+      slides in via CSS. Click-through everywhere except the visible box. Verified end-to-end on
       the real running app: fire → window shows at the exact computed screen coordinates,
       hovering the box enables interaction, hovering empty window padding correctly stays
       click-through (a bug where the hover listener was on the wrong element was caught and
-      fixed during this verification — see Testing above), clicking the box hides it, and the
-      30s auto-hide timeout fires correctly when ignored. Not independently confirmed by eye that
-      the slide-in CSS animation _visually_ plays (no Screen Recording permission for a
-      screenshot) — the mechanism is a standard unconditional CSS transition on mount, low risk,
-      but worth a glance from you if you want to eyeball it.
+      fixed during this verification — see Testing above). Not independently confirmed by eye
+      that the slide-in CSS animation _visually_ plays (no Screen Recording permission for a
+      screenshot) — the mechanism is a standard unconditional CSS transition on mount, low risk.
+      You said you'd eyeball this yourself; update this line once confirmed.
+- [x] Drink Water / Snooze / Settings actions and real IPC wiring — three buttons, each its own
+      IPC channel and its own `ipcMain.on` handler (no shared branching handler, so wiring the
+      real Settings window later only touches the `overlay:settings` handler). Drink Water calls
+      `timer.drinkWater()`, Snooze calls `timer.snooze()`, Settings logs + stub-notifies (no
+      Settings window yet) — all three then hide the window. The 30s auto-hide is now a real
+      permanent fallback (re-labeled from "temporary stand-in"); the old "click anywhere hides"
+      behavior is gone, since it would've conflicted with clicking a specific button. Verified
+      end-to-end on the real running app for all three buttons plus the auto-hide fallback, via
+      the same synthetic-input technique as the Character Overlay Window task — this surfaced two
+      more test-harness gotchas (in-flight CSS transform coordinates, and stale DOM hover state
+      surviving hide/show) now documented in Testing above; no bugs in the shipped code itself
+      this time.
 - [ ] Lottie character animation (real character art, idle loop) — not started; current
-      placeholder is a plain colored box.
-- [ ] Drink Water / Snooze / Settings actions and real IPC wiring — not started. The main-process
-      functions (`drinkWater()`, `snooze()`) and the overlay's click-through/show/hide plumbing
-      both exist; this task replaces the two temporary stand-ins (click-anywhere-to-hide, 30s
-      auto-hide) with real buttons that call `drinkWater()`/`snooze()`/open Settings.
+      placeholder is a plain colored box plus plain buttons.
 - [ ] Settings panel UI — not started.
-- [ ] electron-store schema for daily drink-log progress (settings schema exists; progress
-      tracking doesn't yet) — not started.
+- [ ] electron-store schema for daily drink-log progress — not started; deliberately held off
+      until Settings exists (a UI to view/set the goal against makes progress tracking more
+      meaningful). Drink Water currently only console-logs, doesn't persist a count.
 - [ ] `electron-builder` packaging — not started (needed to fully verify launch-at-login).
 
 ## Definition of Done

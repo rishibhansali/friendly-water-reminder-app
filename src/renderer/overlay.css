@@ -19,14 +19,40 @@ body,
   padding: 16px;
 }
 
+.interactive-cluster {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  transform: translateX(150%);
+  animation: slide-in 0.6s ease-out forwards;
+}
+
 .placeholder-character {
   width: 96px;
   height: 96px;
   border-radius: 16px;
   background: #3b82f6;
+}
+
+.button-row {
+  display: flex;
+  gap: 6px;
+}
+
+.button-row button {
+  font-family: sans-serif;
+  font-size: 11px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f2937;
   cursor: pointer;
-  transform: translateX(150%);
-  animation: slide-in 0.6s ease-out forwards;
+}
+
+.button-row button:hover {
+  background: #e5e7eb;
 }
 
 @keyframes slide-in {

@@ -4,7 +4,9 @@ declare global {
   interface Window {
     overlayBridge: {
       setInteractive: (interactive: boolean) => void;
-      requestHide: () => void;
+      drinkWater: () => void;
+      snooze: () => void;
+      openSettings: () => void;
     };
   }
 }
@@ -12,18 +14,28 @@ declare global {
 function Overlay() {
   return (
     <div className="overlay-root">
-      {/* Hover/click listeners live on the visible box itself, not the
-          surrounding container — the container fills the whole (mostly
-          transparent) window, and only the actual character/button area
-          should ever stop being click-through. */}
+      {/* Hover/click listeners live on this cluster (character + buttons),
+          not the surrounding container — the container fills the whole
+          (mostly transparent) window, and only the actual character/button
+          area should ever stop being click-through. */}
       <div
-        className="placeholder-character"
+        className="interactive-cluster"
         onMouseEnter={() => window.overlayBridge.setInteractive(true)}
         onMouseLeave={() => window.overlayBridge.setInteractive(false)}
-        // TEMPORARY: clicking the placeholder stands in for the real Drink
-        // Water / Snooze / Settings buttons, which land in the next task.
-        onClick={() => window.overlayBridge.requestHide()}
-      />
+      >
+        <div className="placeholder-character" />
+        <div className="button-row">
+          <button type="button" onClick={() => window.overlayBridge.drinkWater()}>
+            Drink Water
+          </button>
+          <button type="button" onClick={() => window.overlayBridge.snooze()}>
+            Snooze
+          </button>
+          <button type="button" onClick={() => window.overlayBridge.openSettings()}>
+            Settings
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

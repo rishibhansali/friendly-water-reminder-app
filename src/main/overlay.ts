@@ -1,14 +1,14 @@
 import { BrowserWindow, ipcMain, screen } from 'electron';
 import path from 'node:path';
-import { registerFireHandler } from './timer';
+import { registerFireHandler, drinkWater, snooze } from './timer';
+import { notify } from './notify';
 
 const WINDOW_WIDTH = 320;
-const WINDOW_HEIGHT = 220;
+const WINDOW_HEIGHT = 260;
 const EDGE_MARGIN = 20;
 
-// TEMPORARY: no real buttons exist yet, so the overlay auto-hides after this
-// long if ignored. Remove once Drink Water / Snooze / Settings are wired up
-// and the window hides in response to a real user choice instead.
+// Real fallback (not a stand-in): auto-hides the overlay if the user ignores
+// it entirely, since there's no other time limit on how long it stays up.
 const AUTO_HIDE_MS = 30_000;
 
 let overlayWindow: BrowserWindow | null = null;
@@ -92,10 +92,23 @@ export function initOverlay(): void {
     overlayWindow?.setIgnoreMouseEvents(!interactive, { forward: true });
   });
 
-  // TEMPORARY: clicking the placeholder box stands in for the real Drink
-  // Water / Snooze / Settings buttons, which land in the next task.
-  ipcMain.on('overlay:hide-request', () => {
-    console.log('[overlay] Hide requested by placeholder click (stand-in).');
+  ipcMain.on('overlay:drink-water', () => {
+    console.log('[overlay] Drink Water clicked.');
+    drinkWater();
+    hideOverlay();
+  });
+
+  ipcMain.on('overlay:snooze', () => {
+    console.log('[overlay] Snooze clicked.');
+    snooze();
+    hideOverlay();
+  });
+
+  // Settings window doesn't exist yet — stub, same pattern as the tray's
+  // existing "Set Goal…" stub.
+  ipcMain.on('overlay:settings', () => {
+    console.log('[overlay] Settings clicked (stub — no Settings window yet).');
+    notify('Settings', 'Settings panel is coming soon.');
     hideOverlay();
   });
 
