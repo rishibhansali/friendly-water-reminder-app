@@ -1,7 +1,7 @@
 import { BrowserWindow, ipcMain, screen } from 'electron';
 import path from 'node:path';
 import { registerFireHandler, drinkWater, snooze } from './timer';
-import { notify } from './notify';
+import { openSettingsWindow } from './settings';
 
 const WINDOW_WIDTH = 320;
 const WINDOW_HEIGHT = 260;
@@ -104,11 +104,9 @@ export function initOverlay(): void {
     hideOverlay();
   });
 
-  // Settings window doesn't exist yet — stub, same pattern as the tray's
-  // existing "Set Goal…" stub.
   ipcMain.on('overlay:settings', () => {
-    console.log('[overlay] Settings clicked (stub — no Settings window yet).');
-    notify('Settings', 'Settings panel is coming soon.');
+    console.log('[overlay] Settings clicked.');
+    openSettingsWindow();
     hideOverlay();
   });
 

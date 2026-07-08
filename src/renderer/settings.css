@@ -1,0 +1,35 @@
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+.settings-root {
+  font-family: sans-serif;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-sizing: border-box;
+}
+
+.settings-root label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: #1f2937;
+}
+
+.settings-root input[type='number'] {
+  font-size: 13px;
+  padding: 4px 6px;
+}
+
+.settings-root .checkbox-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}

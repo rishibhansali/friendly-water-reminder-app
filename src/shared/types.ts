@@ -5,3 +5,9 @@ export interface AppSettings {
   launchAtLogin: boolean;
   remindersEnabled: boolean;
 }
+
+/** The subset of AppSettings the Settings window reads and edits. */
+export type EditableSettings = Pick<
+  AppSettings,
+  'reminderIntervalMinutes' | 'dailyGoalMl' | 'launchAtLogin'
+>;

@@ -1,12 +1,10 @@
 import { app, Menu, nativeImage, Tray } from 'electron';
 import { settingsStore } from './store';
 import { notify } from './notify';
+import { applyLaunchAtLogin } from './launch-at-login';
+import { openSettingsWindow } from './settings';
 
 let tray: Tray | null = null;
-
-function applyLoginItemSettings(launchAtLogin: boolean): void {
-  app.setLoginItemSettings({ openAtLogin: launchAtLogin });
-}
 
 function buildMenu(): Menu {
   return Menu.buildFromTemplate([
@@ -24,14 +22,14 @@ function buildMenu(): Menu {
       checked: settingsStore.get('launchAtLogin'),
       click: (menuItem) => {
         settingsStore.set('launchAtLogin', menuItem.checked);
-        applyLoginItemSettings(menuItem.checked);
+        applyLaunchAtLogin(menuItem.checked);
       },
     },
     { type: 'separator' },
     {
-      label: 'Set Goal…',
+      label: 'Settings…',
       click: () => {
-        notify('Set Goal', 'Goal settings are coming soon.');
+        openSettingsWindow();
       },
     },
     {
@@ -54,11 +52,21 @@ export function createTray(): Tray {
   tray = new Tray(nativeImage.createEmpty());
   tray.setTitle('💧');
   tray.setToolTip('Friendly Water Reminder');
-  tray.setContextMenu(buildMenu());
+
+  // Rebuild the menu fresh on every click rather than setContextMenu() once —
+  // checkbox items snapshot their `checked` state at build time, so a menu
+  // built once at startup would go stale the moment settings change from
+  // anywhere else (e.g. the Settings window).
+  tray.on('click', () => {
+    tray?.popUpContextMenu(buildMenu());
+  });
+  tray.on('right-click', () => {
+    tray?.popUpContextMenu(buildMenu());
+  });
 
   // Ensure the OS-level login item setting matches whatever was last persisted,
   // since setLoginItemSettings isn't itself durable across store resets/reinstalls.
-  applyLoginItemSettings(settingsStore.get('launchAtLogin'));
+  applyLaunchAtLogin(settingsStore.get('launchAtLogin'));
 
   return tray;
 }

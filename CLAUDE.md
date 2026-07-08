@@ -8,19 +8,21 @@ When the timer fires, a small transparent/frameless/always-on-top window slides 
 2D character in from the bottom-right of the screen, settles into an idle loop, then offers
 "Drink Water," "Snooze," and "Settings." Progress and settings persist locally.
 
-**Status:** Tray, the reminder scheduler, and the Character Overlay Window (placeholder visual,
-real Drink Water / Snooze / Settings-stub buttons) are all working. No Settings UI or daily
-progress persistence yet — see "Current Status" below.
+**Status:** Tray, the reminder scheduler, the Character Overlay Window, and the Settings window
+are all working. Only daily progress persistence is left before the core loop is complete — see
+"Current Status" below.
 
 ## Tech Stack
 
 - **Electron** — cross-platform desktop shell; gives us a tray icon, always-on-top frameless
   windows, and auto-launch-at-login, none of which exist in a plain browser.
-- **React + TypeScript** — renderer UI (the character popup and future settings panel).
+- **React + TypeScript** — renderer UI (the character overlay and the Settings window).
   TypeScript is used in both main and renderer processes for shared types and safety.
-- **Vite** — dev server + build for the renderer only (fast HMR, minimal config). The main
-  process is compiled separately with plain `tsc` (see Build Pipeline below) since it's a
-  small amount of Node-targeted code that doesn't benefit from bundling.
+- **Vite** — dev server + build for the renderer only (fast HMR, minimal config), as a
+  **multi-page build**: `index.html` (overlay) and `settings.html` (Settings window) are both
+  listed in `build.rollupOptions.input`. The main process is compiled separately with plain `tsc`
+  (see Build Pipeline below) since it's a small amount of Node-targeted code that doesn't benefit
+  from bundling.
 - **electron-store** — simple local JSON persistence for settings and daily drink log; avoids
   standing up a real database for a single-user desktop tool. **Pinned to v8** (`^8.2.0`), not
   the current v11 — v9+ is ESM-only and cannot be `require()`'d from the CommonJS-compiled main
@@ -72,17 +74,19 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
 
 - `src/main/` — Electron main process (app lifecycle, tray, windows, IPC handlers, timers).
   Compiled with `tsc` (CommonJS) to `dist/main/`. Currently: `index.ts` (entry, hides dock icon,
-  creates the tray, initializes the overlay, starts the scheduler), `tray.ts` (Tray + Menu +
-  handlers), `timer.ts` (reminder scheduler — see Architectural Decisions), `overlay.ts`
-  (Character Overlay Window — see Architectural Decisions), `notify.ts` (shared console log +
-  native `Notification` helper, used by `tray.ts` stubs and `timer.ts`), `store.ts` (typed
-  electron-store wrapper), `preload.ts` (`contextBridge` bridge for the overlay window — first
-  real IPC channel in the app; see IPC boundary below).
-- `src/renderer/` — React UI, built with Vite to `dist/renderer/`. `main.tsx` (React entry) mounts
-  `Overlay.tsx` (the Character Overlay Window's content — currently the only renderer entry
-  point; a future Settings panel will need its own window/entry, decide multi-entry-point Vite
-  config vs. a second window at that point), styled by `overlay.css`. `vite-env.d.ts` pulls in
-  Vite's client types (needed for CSS side-effect imports to typecheck).
+  initializes settings, creates the tray, initializes the overlay, starts the scheduler),
+  `tray.ts` (Tray + Menu + handlers), `timer.ts` (reminder scheduler — see Architectural
+  Decisions), `overlay.ts` (Character Overlay Window — see Architectural Decisions), `settings.ts`
+  (Settings window — see Architectural Decisions), `launch-at-login.ts` (the one function that
+  calls `app.setLoginItemSettings`, shared by `tray.ts` and `settings.ts` so there's exactly one
+  place that touches the OS-level login item registration), `notify.ts` (shared console log +
+  native `Notification` helper, used by `tray.ts`'s remaining stub and `timer.ts`), `store.ts`
+  (typed electron-store wrapper), `preload.ts` (bridge for the overlay window), `settingsPreload.ts`
+  (separate bridge for the Settings window — one preload/bridge per window, not one shared bridge).
+- `src/renderer/` — React UI, built with Vite to `dist/renderer/` as two pages: `main.tsx` mounts
+  `Overlay.tsx` (`index.html`), `settings-main.tsx` mounts `Settings.tsx` (`settings.html`),
+  styled by `overlay.css`/`settings.css` respectively. `vite-env.d.ts` pulls in Vite's client
+  types (needed for CSS side-effect imports to typecheck).
 - `src/shared/` — Code and types used by both processes (constants, `AppSettings` shape, etc.).
   No Electron or DOM APIs here — keep it environment-agnostic so it's easy to unit test.
 - `dist/` — build output (gitignored).
@@ -94,27 +98,35 @@ come up") only becomes meaningful once the app is packaged into its own `.app` b
   process. The renderer is presentation-only — it receives state via IPC/preload and sends
   user actions (Drink Water, Snooze, settings changes) back. Do not read/write electron-store
   directly from the renderer.
-- **IPC boundary:** `src/main/preload.ts` is the only file allowed to use `contextBridge`.
-  Renderer code must go through the bridge it exposes — never enable `nodeIntegration` in a
-  `BrowserWindow` to shortcut this. It currently exposes `window.overlayBridge` (`setInteractive`,
-  `drinkWater`, `snooze`, `openSettings`) for the Character Overlay Window — one bridge object per
-  window's concerns is the pattern; a future Settings window would get its own
-  `window.settingsBridge`-style object rather than everything piling onto one global bridge. Each
-  of the three action methods is its own IPC channel (`overlay:drink-water`, `overlay:snooze`,
-  `overlay:settings`) with its own `ipcMain.on` handler — deliberately not one shared
-  `overlay:action` channel branching on a payload, so wiring up the real Settings window later
-  only touches the `overlay:settings` handler, not a shared one all three actions run through.
+- **IPC boundary:** only preload scripts may use `contextBridge`. Renderer code must go through
+  the bridge exposed to it — never enable `nodeIntegration` in a `BrowserWindow` to shortcut this.
+  One bridge object per window's concerns, one preload script per window: `preload.ts` exposes
+  `window.overlayBridge` (`setInteractive`, `drinkWater`, `snooze`, `openSettings`) to the overlay
+  window; `settingsPreload.ts` exposes `window.settingsBridge` (`getSettings`,
+  `setReminderInterval`, `setDailyGoal`, `setLaunchAtLogin`) to the Settings window. Each action
+  method is its own IPC channel with its own `ipcMain.on`/`ipcMain.handle` handler, never one
+  shared channel branching on a payload — e.g. `overlay:drink-water`, `overlay:snooze`, and
+  `overlay:settings` are three separate handlers, so wiring the real Settings window into
+  `overlay:settings` only touched that one handler, nothing shared.
+- **`settings:get` uses `ipcMain.handle`/`invoke`, not `send`/`on`** — it's the one place the
+  renderer needs a value _back_ from main (the current settings, to populate the form), so it's
+  the app's only `invoke`-style channel; everything else is fire-and-forget `send`. `Settings.tsx`
+  renders a "Loading…" state until that promise resolves, rather than rendering inputs bound to
+  `undefined` for a frame.
 - **Tray behavior:** One tray icon for the app's lifetime, built and owned by the main process
   (`src/main/tray.ts`). No icon asset file — `tray.setTitle('💧')` on an empty `nativeImage` is
   used as the placeholder icon (text-only menu bar items are a standard macOS pattern; swap for
   a real image later via `nativeImage.createFromPath`). The dropdown is a native
   `Menu.buildFromTemplate`, not a BrowserWindow: two checkbox items ("Reminders On",
-  "Launch at Login") that write straight through to `store.ts` on click, then Set Goal / Remind
-  me in 10 min (stubs — call `notify()` from `notify.ts`, intentionally non-blocking, no
-  `dialog.showMessageBox`), then Quit. All settings reads/writes for the tray go through
-  `settingsStore` in `store.ts` — don't instantiate a second `electron-store` elsewhere. The
-  tray's "Remind me in 10 min" stub is independent of the real scheduler's `snooze()` — it isn't
-  wired to `timer.ts` yet (no UI wiring until the Character Overlay Window exists to trigger it).
+  "Launch at Login"), a "Settings…" item (opens the Settings window), "Remind me in 10 min" (still
+  a stub — independent of the real scheduler's `snooze()`, not wired since there's no UI reason to
+  trigger it from the tray specifically), then Quit. All settings reads/writes for the tray go
+  through `settingsStore` in `store.ts` — don't instantiate a second `electron-store` elsewhere.
+  **The menu is rebuilt fresh on every click** (`tray.on('click', () => tray.popUpContextMenu(buildMenu()))`)
+  rather than built once via `setContextMenu()` at creation time — checkbox items snapshot their
+  `checked` state at build time, so a menu built once would go stale the instant a setting changes
+  from anywhere else (this was a real latent bug, caught and fixed while building the Settings
+  window, before it ever shipped — see Testing below for how it was verified).
 - **Timer / reminder scheduler (`src/main/timer.ts`):** A single countdown lives in the main
   process (not per-window, and not owned by the tray), since it must keep running regardless of
   whether any window exists. It holds one `NodeJS.Timeout` reference (`pendingFire`) and exposes
@@ -171,11 +183,11 @@ cluster` wrapper div** (the placeholder box + button row together), not the oute
     the cursor happens to already be sitting over where the box will render doesn't inherit
     whatever interactive state it was left in.
   - **Three buttons, three IPC channels, three handlers:** Drink Water calls `timer.drinkWater()`
-    then `hideOverlay()`; Snooze calls `timer.snooze()` then `hideOverlay()`; Settings — no
-    Settings window exists yet — logs and calls `notify()` as a stub (same pattern as the tray's
-    existing "Set Goal…" stub), then `hideOverlay()`. Drink Water intentionally does **not**
-    persist anything yet beyond a console log — daily drink-log persistence is its own later task
-    (holding off until Settings exists, so there's a UI to view/set the goal against).
+    then `hideOverlay()`; Snooze calls `timer.snooze()` then `hideOverlay()`; Settings calls
+    `openSettingsWindow()` (a plain function call — `overlay.ts` and `settings.ts` are both main
+    process, no IPC needed for this hop) then `hideOverlay()`. Drink Water intentionally does
+    **not** persist anything yet beyond a console log — daily drink-log persistence is its own
+    later task (holding off until Settings exists, so there's a UI to view/set the goal against).
   - **Hiding:** a real 30s auto-hide fallback (`AUTO_HIDE_MS`) covers the case where the overlay is
     ignored entirely — the only way it hides now besides clicking one of the three buttons. The
     earlier "click anywhere hides" stand-in from the previous task is gone; it would have
@@ -189,6 +201,30 @@ cluster` wrapper div** (the placeholder box + button row together), not the oute
     concept describes them appearing once the character settles, but sequencing that is an
     animation-timing detail out of scope for this task, not attempted here. No idle loop, no
     Lottie — separate future task.
+
+- **Settings window (`src/main/settings.ts` + `src/renderer/Settings.tsx`):** a real, separate
+  `BrowserWindow` — normal frame/title bar, not transparent or always-on-top, unlike the overlay —
+  since it's a form the user actively edits, not a transient notification. `openSettingsWindow()`
+  creates it on demand and `.focus()`es the existing one instead of opening a duplicate if it's
+  already open; it's destroyed (not hidden) on close via the window's own `'closed'` event
+  resetting the module's reference to `null`, which is the simpler/more idiomatic choice for a
+  window with normal close-button chrome (vs. the overlay's hide-and-reuse, which fits its
+  frameless/no-close-button nature better).
+  - **Reads/writes `reminderIntervalMinutes`, `dailyGoalMl`, `launchAtLogin`** (the
+    `EditableSettings` type in `src/shared/types.ts` — a `Pick` of `AppSettings`, not the whole
+    thing; `snoozeMinutes`/`remindersEnabled` aren't edited here). Loads them once via
+    `settings:get` on mount; each field writes back on change, not via a Save button.
+  - **Validation lives in the main-process IPC handlers** (`isPositiveNumber()` in `settings.ts`),
+    not just the form — main is the trust boundary, and the renderer's `type="number" min="1"` is
+    only a UX hint. Invalid values (`<= 0`, `NaN`) are logged and silently ignored, leaving the
+    store untouched, rather than writing garbage.
+  - **Launch at Login here calls the exact same `applyLaunchAtLogin()`** the tray's own checkbox
+    uses (`src/main/launch-at-login.ts`) — there is exactly one place that calls
+    `app.setLoginItemSettings`, not two independent call sites that could drift.
+  - **No live sync between windows while both are open**: if the tray's checkbox is toggled while
+    Settings is also open (or vice versa), the one not just-clicked won't visually update until
+    reopened. Deliberately out of scope for this task ("keep it simple") — would need
+    `webContents.send` pushing updates to whichever window didn't originate the change.
 
 ## Conventions
 
@@ -261,6 +297,18 @@ property`. Don't try to monkey-patch them directly in a test harness; instead in
   the synthetic cursor to a neutral point outside the interactive area first (forcing a real
   `mouseleave`), then into the target — mirroring how a real user's cursor naturally arrives from
   outside the window anyway.
+- **Verifying a native `Menu` reflects current state without a real click**: monkey-patch
+  `Tray.prototype.popUpContextMenu` (before `createTray()` is called) to capture whatever `Menu`
+  gets passed in and skip actually calling the original (which would try to show a real native
+  menu and hang a headless script waiting for it to close). Then call `tray.emit('click')`
+  directly — `Tray` is a Node `EventEmitter`, so this fires the exact same handler a real click
+  would, rebuilding the menu fresh — and inspect `capturedMenu.items` for the checkbox's `checked`
+  value. This is how the tray-menu staleness fix was confirmed: change a setting via the Settings
+  window's bridge, then emit a synthetic tray click and check the freshly-built menu reflects it.
+- **Waiting on an async React render inside `executeJavaScript`**: don't assume a component has
+  finished its first render/effect by the time `executeJavaScript` runs — poll inside the injected
+  script itself (a small `resolve`-when-ready loop checking the DOM) rather than adding a fixed
+  `sleep` in the outer Node script and hoping it's long enough.
 
 ## Current Status
 
@@ -310,12 +358,27 @@ property`. Don't try to monkey-patch them directly in a test harness; instead in
       more test-harness gotchas (in-flight CSS transform coordinates, and stale DOM hover state
       surviving hide/show) now documented in Testing above; no bugs in the shipped code itself
       this time.
+- [x] Settings window (`src/main/settings.ts` + `src/renderer/Settings.tsx`) — a real separate
+      `BrowserWindow`, create-or-focus (no duplicates), reads/writes `reminderIntervalMinutes`,
+      `dailyGoalMl`, `launchAtLogin` via a dedicated `settingsBridge`/`settingsPreload.ts`.
+      Validation lives in the main-process handlers. Launch at Login shares the exact same
+      `applyLaunchAtLogin()` the tray checkbox uses (extracted to `src/main/launch-at-login.ts`).
+      The overlay's Settings button and the tray's renamed "Settings…" item (formerly
+      "Set Goal…") both now open this window instead of their old stubs. Verified end-to-end on
+      the real running app: form loads current store values, writes persist, invalid
+      (`<=0`/`NaN`) values are rejected and leave the store untouched, opening twice doesn't
+      duplicate the window, and — the specific concern raised before building this — toggling
+      Launch at Login from Settings is correctly reflected in the tray's own checkbox next time
+      the dropdown opens. That last check surfaced a real bug that predated this task: the tray
+      menu was only ever built once at startup (`setContextMenu()`), so it would have gone stale
+      the instant any setting changed from elsewhere. Fixed by rebuilding the menu on every click
+      instead (see Architectural Decisions and Testing above) — caught and fixed before shipping,
+      not a regression.
 - [ ] Lottie character animation (real character art, idle loop) — not started; current
       placeholder is a plain colored box plus plain buttons.
-- [ ] Settings panel UI — not started.
-- [ ] electron-store schema for daily drink-log progress — not started; deliberately held off
-      until Settings exists (a UI to view/set the goal against makes progress tracking more
-      meaningful). Drink Water currently only console-logs, doesn't persist a count.
+- [ ] electron-store schema for daily drink-log progress — not started. Now that Settings exists
+      (with a daily goal field to track progress against), this is the last piece before the core
+      loop is complete.
 - [ ] `electron-builder` packaging — not started (needed to fully verify launch-at-login).
 
 ## Definition of Done
