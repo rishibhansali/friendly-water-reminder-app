@@ -8,10 +8,9 @@ When the timer fires, a small transparent/frameless/always-on-top window slides 
 2D character in from the bottom-right of the screen, settles into an idle loop, then offers
 "Drink Water," "Snooze," and "Settings." Progress and settings persist locally.
 
-**Status:** The full original core loop is complete — Tray, reminder scheduler, Character Overlay
-Window, Settings window, and daily progress persistence all working end-to-end. Remaining work is
-polish (real character art/Lottie, a real tray icon, `electron-builder` packaging) — see
-"Current Status" below.
+**Status:** The full original core loop is complete and now packages into a real standalone
+`.app` via `electron-builder`. Remaining work is polish (real character art/Lottie, a real tray
+icon) — see "Current Status" below.
 
 ## Tech Stack
 
@@ -35,6 +34,9 @@ polish (real character art/Lottie, a real tray icon, `electron-builder` packagin
 - **ESLint + Prettier** — linting/formatting, flat ESLint config (`eslint.config.mjs`, ESLint 9).
 - **Vitest** — unit tests for shared/pure logic (main and renderer are thin by design; most
   test coverage should target `src/shared`).
+- **electron-builder** — packages `dist/` into a real standalone `.app` (see "Packaging" below).
+  No code signing certificate or notarization — this is a personal, local-use tool, not
+  App Store/Gatekeeper-distributed.
 
 ## Dev Environment — Use These Exact Commands (verified 2026-07-07)
 
@@ -47,6 +49,8 @@ polish (real character art/Lottie, a real tray icon, `electron-builder` packagin
 - Dev mode (hot reload): `npm run dev` — runs Vite dev server + `tsc --watch` for main +
   Electron concurrently; Electron loads `http://localhost:5173` via `ELECTRON_RENDERER_URL`.
 - Run built app: `npm start` (loads the built `dist/renderer/index.html` via `loadFile`)
+- Package a real standalone `.app`: `npm run package` (builds first, then runs
+  `electron-builder`) — see "Packaging" below.
 - NEVER install packages globally — all dependencies live in `node_modules/`.
 
 ### Known environment gotcha
@@ -59,17 +63,44 @@ instead of the API object, and `app`/`BrowserWindow` will be `undefined`. Fix: r
 `env -u ELECTRON_RUN_AS_NODE npm start` (or unset it in the shell) when testing from such a
 terminal. A real user's Terminal.app/iTerm session does not have this var set.
 
-### Launch-at-login only fully works once packaged
+### Launch-at-login in dev mode vs. packaged
 
-`app.setLoginItemSettings` / the "Launch at Login" tray toggle correctly registers/unregisters
-the app with macOS's Background Task Management (verified directly with `sfltool dumpbtm` —
-toggling flips the entry's `Disposition` between `enabled` and `disabled`). **However**, in dev
-mode the registered login item points at the raw `node_modules/electron/dist/Electron.app`
-binary with no argument telling it to load this project — `getLoginItemSettings()` confirms this
-via `executableWillLaunchAtLogin: false`. A real login would launch bare Electron, not this app.
-This is expected and not a bug: full end-to-end verification ("restart the Mac, see the app
-come up") only becomes meaningful once the app is packaged into its own `.app` bundle (e.g. via
-`electron-builder`), which is not set up yet.
+`app.setLoginItemSettings` / the "Launch at Login" toggle correctly registers/unregisters the app
+with macOS's Background Task Management (verified directly with `sfltool dumpbtm` — toggling
+flips the entry's `Disposition` between `enabled` and `disabled`). In **dev mode**
+(`npm start`/`npm run dev`), the registered login item points at the raw
+`node_modules/electron/dist/Electron.app` binary with no argument telling it to load this
+project — `getLoginItemSettings()` confirms this via `executableWillLaunchAtLogin: false`. A real
+login would launch bare Electron, not this app. That's expected, not a bug — it's specifically
+why packaging (below) was needed before this could be fully verified with a real logout/login.
+
+## Packaging
+
+`npm run package` (`electron-builder`, config in `electron-builder.yml` at the project root, not
+inlined in `package.json` — consistent with this project's one-config-file-per-tool pattern)
+produces a real standalone `Friendly Water Reminder.app` at
+`release/mac-arm64/Friendly Water Reminder.app`. No code signing certificate, no notarization —
+`mac.target: dir` outputs the raw `.app` directly (no DMG), which is all a personal local-use
+tool needs. `files: [dist/**/*, package.json]` keeps `src/` and everything else out of the
+package. No custom app icon yet (electron-builder's placeholder) — that's the separate tray/
+character-art polish task.
+
+**Apple Silicon still requires _ad-hoc_ signing just to launch at all** (unrelated to the
+Developer ID signing/notarization this project deliberately skips) — arm64 binaries won't run
+unsigned. electron-builder logs "skipped macOS application code signing" (no Developer ID
+certificate found, expected), but the app still launches fine: the prebuilt Electron.app
+framework it wraps already carries its own ad-hoc linker signature
+(`codesign -dv` shows `Signature=adhoc`), which is sufficient. Don't try to set `mac.identity:
+null` or otherwise disable this — that would strip even the ad-hoc signature and the app
+wouldn't open.
+
+Verified end-to-end by launching the packaged binary directly (not `electron .`) and driving it
+with the same synthetic-input technique used throughout this project: tray/timer/overlay/
+settings/progress all initialize and function identically to `npm start` — a real reminder fire,
+a real Drink Water click (incrementing the store and hiding the window), Snooze, and the Settings
+window opening and showing live progress, all inside the packaged `app.asar`. This is exactly the
+kind of thing that can silently break when moving from dev to packaged (preload script paths,
+asar-relative resource paths) and didn't.
 
 ## Folder Structure
 
@@ -354,6 +385,27 @@ property`. Don't try to monkey-patch them directly in a test harness; instead in
   that only lives in `index.ts`). Set any store state needed _before_ requiring `index.js`, then
   `await app.whenReady()` again in the harness (safe — it's the same already-resolving promise) to
   wait for its own `.then()` callback to finish before proceeding.
+- **Verifying a _packaged_ app (not `electron .`) needs a different approach**, since you can no
+  longer `require()` its compiled files into a controlling script — it's a separate OS process
+  running from an asar. Launch the actual binary directly
+  (`MyApp.app/Contents/MacOS/<ProductName>`, works fine from a terminal, stdout/stderr included)
+  with `--remote-debugging-port=9222`, then drive it over the Chrome DevTools Protocol: `GET
+http://localhost:9222/json` lists open pages/windows (each `BrowserWindow`'s loaded URL shows up
+  here, including its real `app.asar`-relative path — useful on its own to confirm packaging
+  resolved paths correctly), then open a `WebSocket` to a target's `webSocketDebuggerUrl` and send
+  `{method: "Runtime.evaluate", params: {expression, returnByValue: true}}` to run arbitrary JS in
+  it — e.g. reading `window.screenX/screenY` plus `getBoundingClientRect()` to compute exact
+  synthetic-click coordinates, the same way `executeJavaScript` was used for the dev-mode app.
+  Node 22+'s global `WebSocket`/`fetch` are enough; no extra dependency needed. Remember to strip
+  `ELECTRON_RUN_AS_NODE` from the spawned child's env too, same as every other launch in this
+  project.
+- **A multi-tool-call gap between "the overlay fired" and "click it" can be long enough for the
+  real 30s auto-hide to fire first**, especially when a step in between (like a DevTools Protocol
+  round-trip) takes real wall-clock thinking/writing time between separate tool invocations —
+  the result looks identical to a bug (window hides with no preceding button-click log) but isn't
+  one. Fix: do the whole launch → wait-for-fire → measure-coordinates → click sequence inside a
+  single self-contained script (one process, no inter-tool-call latency) rather than spreading it
+  across multiple back-and-forth tool calls.
 
 ## Current Status
 
@@ -369,9 +421,9 @@ property`. Don't try to monkey-patch them directly in a test harness; instead in
 - [x] Auto-launch at login — `launchAtLogin` toggle wired to `app.setLoginItemSettings`,
       persisted via electron-store, and the underlying OS registration verified directly with
       `sfltool dumpbtm` (toggling flips Background Task Management's disposition between
-      enabled/disabled in both directions). **Not yet verified via a real logout/restart** — see
-      "Launch-at-login only fully works once packaged" above; that end-to-end test is only
-      meaningful after `electron-builder` packaging exists.
+      enabled/disabled in both directions). Dev-mode-vs-packaged distinction documented above.
+      **Real logout/login confirmation with the packaged app: pending — update this line once
+      you've confirmed it.**
 - [x] Main-process reminder scheduler (`src/main/timer.ts`) — `startScheduler()` /
       `drinkWater()` / `snooze()` implemented and verified with a real (short-interval) exercise
       script requiring the compiled module directly: fires on interval when enabled, `snooze()`
@@ -431,22 +483,29 @@ property`. Don't try to monkey-patch them directly in a test harness; instead in
       new fields on next launch (no manual migration needed).
 
       **This surfaced a real, previously-shipped bug**, unrelated to progress tracking itself:
-          `index.ts` had no `window-all-closed` handler, so Electron's default behavior would quit the
-          entire app the first time a user closed the Settings window before the overlay had ever
-          been created (e.g. opening Settings from the tray before any reminder had fired) — zero
-          windows open, no handler, app (and tray icon) gone. Fixed with a no-op handler; see
-          Architectural Decisions and Testing above for how it was caught and confirmed fixed.
+              `index.ts` had no `window-all-closed` handler, so Electron's default behavior would quit the
+              entire app the first time a user closed the Settings window before the overlay had ever
+              been created (e.g. opening Settings from the tray before any reminder had fired) — zero
+              windows open, no handler, app (and tray icon) gone. Fixed with a no-op handler; see
+              Architectural Decisions and Testing above for how it was caught and confirmed fixed.
 
-          **This completes the original core loop end-to-end**: tray → timer fires → overlay shows →
-          Drink Water/Snooze act on the real scheduler and now persist progress → Settings configures
-          everything, including viewing that same progress.
+              **This completes the original core loop end-to-end**: tray → timer fires → overlay shows →
+              Drink Water/Snooze act on the real scheduler and now persist progress → Settings configures
+              everything, including viewing that same progress.
 
+- [x] `electron-builder` packaging (`electron-builder.yml`, `npm run package`) — produces a real
+      standalone `Friendly Water Reminder.app` (no signing/notarization, `mac.target: dir`, no
+      DMG). Verified end-to-end by launching the packaged binary directly and driving it with the
+      same synthetic-input technique used throughout: tray/timer/overlay/settings/progress all
+      initialize and function identically to `npm start`, inside the packaged `app.asar` — a real
+      concern for a first packaging pass (preload paths, asar-relative resource paths), and
+      nothing broke. **The one thing I can't do myself: a real logout/login test** to confirm the
+      packaged app actually relaunches at login (as opposed to the dev-mode limitation documented
+      above) — that's a genuinely disruptive action to trigger from here, so it's on you. Once
+      confirmed, update the Launch-at-login status line above.
 - [ ] Lottie character animation (real character art, idle loop) — not started; current
       placeholder is a plain colored box plus plain buttons.
 - [ ] Real tray icon — not started; current placeholder is a 💧 emoji title, no image asset.
-- [ ] `electron-builder` packaging — not started (needed to fully verify launch-at-login with a
-      real logout/restart, and to give the app a stable identity instead of running as raw
-      `Electron.app` from source).
 
 ## Definition of Done
 

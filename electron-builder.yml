@@ -1,0 +1,10 @@
+appId: com.rishibhansali.friendly-water-reminder
+productName: Friendly Water Reminder
+directories:
+  output: release
+files:
+  - dist/**/*
+  - package.json
+mac:
+  target: dir
+  category: public.app-category.utilities
